@@ -231,12 +231,12 @@ if bt:
     with t5:
         st.dataframe(res.holdings, hide_index=True)
     with t6:
-        st.write("Runs **every formula in the library** with the same rules and dates, so you can review them side by side.")
+        st.write("Runs **every formula in the library and your saved formulas** with the same rules and dates, so you can review them side by side.")
         st.caption("Careful: picking the formula with the best PAST result is 'curve fitting' and often disappoints later. "
                    "Prefer formulas that are good AND sensible AND stable across different date ranges.")
         if st.button("Run all formulas (may take a minute)"):
             rows, prog = [], st.progress(0.0)
-            for i, f in enumerate(fml.LIBRARY):
+            for i, f in enumerate(fml.all_formulas()):
                 try:
                     r = run_backtest(bt["close"], bt["index_ohlc"], cfg, f.id, ind=bt["ind"], regime_signal=bt["sig"])
                     rows.append({"ID": f.id, "Formula": f.name, "CAGR %": r.metrics["CAGR %"],
@@ -245,7 +245,7 @@ if bt:
                 except Exception as exc:  # noqa: BLE001
                     rows.append({"ID": f.id, "Formula": f.name, "CAGR %": np.nan, "Max drawdown %": np.nan,
                                  "Sharpe": np.nan, "Total return %": np.nan, "Trades": 0})
-                prog.progress((i + 1) / len(fml.LIBRARY))
+                prog.progress((i + 1) / len(fml.all_formulas()))
             st.session_state["bt_compare"] = pd.DataFrame(rows).sort_values("CAGR %", ascending=False)
         if "bt_compare" in st.session_state:
             st.dataframe(st.session_state["bt_compare"].style.format(

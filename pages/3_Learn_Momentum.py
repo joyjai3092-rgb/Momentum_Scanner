@@ -127,12 +127,12 @@ with st.expander("8. What this app cannot do (honest limits)"):
 - **Not an exact Sigma clone:** Sigma does not publish its exact volatility formula, trade timing or regime details. Here: volatility = standard deviation of daily returns over the window, scaled to a year; trades at the same day's close (or next day if you choose). Compare a few results with Sigma before relying on this.
 - **No taxes, no liquidity or impact modelling** beyond the cost % you enter.
 - **Formulas with "Slope" are not included yet** (the Sigma console has them; we agreed to add them later).
-- **Weekly (1-4 week) formulas are not included:** the research here is about 3-12 months, and very short horizons tend to reverse (Jegadeesh 1990, cited in the 2011 review).
+- **Weekly (1-4 week) formulas are not in the ready-made list:** the research here is about 3-12 months, and very short horizons tend to reverse (Jegadeesh 1990, cited in the 2011 review). You can still type them in the Custom box.
         """
     )
 
 with st.expander("9. All 19 formulas at a glance"):
-    for cat in fml.categories():
+    for cat in dict.fromkeys(f.category for f in fml.LIBRARY):
         st.markdown(f"**{cat}**")
         for f in [x for x in fml.LIBRARY if x.category == cat]:
             a, b = st.columns([9, 1])
@@ -140,7 +140,20 @@ with st.expander("9. All 19 formulas at a glance"):
             with b.popover("❓"):
                 st.markdown(fml.help_markdown(f))
 
-with st.expander("10. Sources and further reading", expanded=True):
+with st.expander("10. Write and save your own formula"):
+    st.markdown(fml.RULES_MARKDOWN)
+    st.markdown("**Steps:** pick *Custom* in the dropdown, type the formula, check the plain-English reading under the box, "
+                "run it on the Backtest page, then press *Save this formula*. It then appears in every dropdown and in 'Compare all formulas'.")
+
+with st.expander("11. What is FIP? (column in the Screener)"):
+    st.markdown(
+        "- **FIP = Frog-in-the-Pan** (Gray & Vogel, building on Da, Gurun & Warachka).\n"
+        "- It measures how *smoothly* a stock rose over the last 12 months: % of down days minus % of up days (sign follows the 12-month return).\n"
+        "- **More negative = smoother climb = better.** Many small steps beat one big jump.\n"
+        "- Not to be confused with **FPI = Foreign Portfolio Investor** in Indian markets - the app does not use FPI data."
+    )
+
+with st.expander("12. Sources and further reading", expanded=True):
     st.markdown(
         """
 **In your project documents**

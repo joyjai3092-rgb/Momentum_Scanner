@@ -9,7 +9,7 @@ import pandas as pd
 from .config import RESEARCH_DAYS_PER_MONTH, SIGMA_DAYS_PER_MONTH, TRADING_DAYS_PER_YEAR
 from .formulas import CUSTOM_ID, Formula, get_formula
 from .indicators import Indicators
-from .sigma_parser import ParsedFormula, evaluate, parse_formula
+from .sigma_parser import ParsedFormula, evaluate, need_name, parse_formula
 
 D12 = 12 * RESEARCH_DAYS_PER_MONTH   # 252
 D6 = 6 * RESEARCH_DAYS_PER_MONTH     # 126
@@ -22,12 +22,28 @@ def _row(df: pd.DataFrame, date) -> pd.Series:
     return df.loc[date]
 
 
+def _need_series(ind: Indicators, date, need: tuple) -> pd.Series:
+    k = need[0]
+    sm = SIGMA_DAYS_PER_MONTH
+    if k == "P":
+        return _row(ind.perf(need[1] * sm), date)
+    if k == "V":
+        return _row(ind.vol(need[1] * sm), date)
+    if k == "PW":
+        return _row(ind.perf(need[1] * 5), date)
+    if k == "VW":
+        return _row(ind.vol(need[1] * 5), date)
+    if k == "PS":
+        return _row(ind.skip_return(need[1] * sm, need[2] * sm), date)
+    if k == "FIP":
+        return _row(ind.fip(D12), date)
+    if k == "H52":
+        return _row(ind.high_proximity(TRADING_DAYS_PER_YEAR), date)
+    raise KeyError(f"Unknown formula item: {need}")
+
+
 def _sigma_vars(ind: Indicators, date, needs) -> dict:
-    out = {}
-    for kind, months in needs:
-        days = months * SIGMA_DAYS_PER_MONTH
-        out[f"{kind}{months}"] = _row(ind.perf(days) if kind == "P" else ind.vol(days), date)
-    return out
+    return {need_name(n): _need_series(ind, date, n) for n in needs}
 
 
 def _normalise_z(z: pd.Series) -> pd.Series:

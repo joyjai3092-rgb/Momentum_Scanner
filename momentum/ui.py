@@ -7,10 +7,11 @@ import pandas as pd
 import streamlit as st
 
 from . import formulas as fml
+from . import myformulas as myf
 from .config import INDEX_CHOICES
 from .data import DataError, download_index, download_prices
 from .demo_data import make_demo_prices
-from .sigma_parser import FormulaError, parse_formula
+from .sigma_parser import FormulaError, describe, parse_formula
 from .universe import UniverseError, read_universe
 
 SAMPLE_PATH = Path(__file__).resolve().parents[1] / "sample_data" / "sample_universe.xlsx"
@@ -22,7 +23,16 @@ DISCLAIMER = (
 
 
 # ------------------------------------------------------------------ sidebar
+def load_my_formulas() -> list:
+    """Make the formulas the user saved available to every page (cheap: the list is tiny)."""
+    if "my_records" not in st.session_state:
+        st.session_state["my_records"] = myf.load_records()
+    myf.load_into_registry(st.session_state["my_records"])
+    return st.session_state["my_records"]
+
+
 def sidebar() -> None:
+    load_my_formulas()
     with st.sidebar:
         st.markdown("### Momentum Scanner")
         st.toggle(
@@ -96,9 +106,63 @@ def universe_section() -> pd.DataFrame | None:
 
 
 # ------------------------------------------------------------------ formula picker
+def _my_formulas_manager(key: str) -> None:
+    """Delete saved formulas, download / restore a backup."""
+    records = st.session_state.get("my_records", [])
+    if not records:
+        st.caption("You have not saved any formula yet. Choose 'Custom', type a formula and press 'Save this formula'.")
+    for r in records:
+        a, b = st.columns([8, 1])
+        a.markdown(f"`{r['id']}` **{r['name']}** - `{r['expr']}`")
+        if b.button("Delete", key=f"{key}_del_{r['id']}"):
+            st.session_state["my_records"] = myf.delete(r["id"], records)
+            st.rerun()
+    st.download_button("Download backup of my formulas (.json)", myf.to_json(records), file_name="my_formulas.json",
+                       mime="application/json", key=f"{key}_dl_formulas", disabled=not records,
+                       help="Keep this file. On a free web host saved formulas can disappear when the app restarts - upload the backup to restore them.")
+    up = st.file_uploader("Restore from a backup (.json)", type=["json"], key=f"{key}_up_formulas")
+    if up is not None and st.button("Add the formulas from this file", key=f"{key}_add_formulas"):
+        try:
+            new, added, skipped = myf.from_json(up.getvalue().decode("utf-8", errors="replace"), records)
+        except myf.SaveError as exc:
+            st.error(str(exc))
+        else:
+            myf._write(new)
+            st.session_state["my_records"] = new
+            myf.load_into_registry(new)
+            st.success(f"Added {added} formula(s)." + (f" Skipped {len(skipped)}: " + "; ".join(skipped) if skipped else ""))
+            if added:
+                st.rerun()
+
+
+def _save_box(key: str, text: str) -> None:
+    with st.expander("💾 Save this formula to my list"):
+        st.caption("Saved formulas appear in the dropdown here and on the Backtest / Screener pages, and in 'Compare all formulas'. "
+                   "Tip: run it in the Backtest first.")
+        name = st.text_input("Name", key=f"{key}_save_name", max_chars=myf.MAX_NAME, placeholder="e.g. My 6M momentum per risk")
+        note = st.text_input("One-line note (optional)", key=f"{key}_save_note")
+        if st.button("Save this formula", key=f"{key}_save_btn"):
+            records = st.session_state.get("my_records", [])
+            try:
+                new = myf.save(name, text, note, records)
+            except myf.SaveError as exc:
+                st.error(str(exc))
+            else:
+                st.session_state["my_records"] = new
+                st.session_state["_select_after_save"] = new[-1]["id"]
+                st.rerun()
+
+
 def formula_picker(key: str) -> tuple:
     """Dropdown + (?) help. Returns (formula_id, custom_text_or_None)."""
-    options = [f.id for f in fml.LIBRARY] + [fml.CUSTOM_ID]
+    load_my_formulas()
+    pending = st.session_state.pop("_select_after_save", None)
+    if pending:
+        for k in ("scr", "bt"):                                  # the new formula is selected on both pages
+            st.session_state[f"{k}_formula"] = pending
+    options = [f.id for f in fml.all_formulas()] + [fml.CUSTOM_ID]
+    if st.session_state.get(f"{key}_formula") not in options:
+        st.session_state[f"{key}_formula"] = options[0]
 
     def fmt(fid):
         return "Custom - type my own formula" if fid == fml.CUSTOM_ID else fml.label(fml.get_formula(fid))
@@ -118,20 +182,28 @@ def formula_picker(key: str) -> tuple:
     if fid == fml.CUSTOM_ID:
         custom = st.text_input(
             "Your formula", key=f"{key}_custom", value="6 Month Performance / 6 Month Volatility",
-            help="Use 'N Month Performance' and 'N Month Volatility' (N = 1-12), numbers, %, + - * / and brackets.",
+            help="Items: N Month/Week Performance, N Month/Week Volatility, N Month Performance Skip M Month, FIP, 52 Week High. "
+                 "Plus numbers, %, + - * / and brackets. Open the 'Formula rules' box below for the full rules.",
         )
         try:
-            parse_formula(custom)
+            parsed = parse_formula(custom)
         except FormulaError as exc:
             st.error(str(exc))
-            return fid, None
+            custom = None
+        else:
+            st.caption("I read your formula as:  \n" + "  \n".join(f"- {x}" for x in describe(parsed)))
+            _save_box(key, custom)
     else:
         f = fml.get_formula(fid)
         st.caption(f"{f.one_liner}  ·  {f.category[3:]}")
 
+    with st.expander("📏 Formula rules (how to write your own)"):
+        st.markdown(fml.RULES_MARKDOWN)
+    with st.expander("My saved formulas (delete / backup)"):
+        _my_formulas_manager(key)
     with st.expander("Browse all formulas (each has its own ❓)"):
         last_cat = None
-        for f in fml.LIBRARY:
+        for f in fml.all_formulas():
             if f.category != last_cat:
                 st.markdown(f"**{f.category}**")
                 last_cat = f.category

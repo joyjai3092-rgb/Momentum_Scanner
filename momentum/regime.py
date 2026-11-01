@@ -85,3 +85,32 @@ def build_signal(ohlc: pd.DataFrame, kind: str, params: tuple) -> pd.Series | No
     if kind == "SUPERTREND":
         return supertrend_signal(ohlc, int(params[0]), float(params[1]))
     return None
+
+
+def equal_weight_index(close: pd.DataFrame) -> pd.DataFrame | None:
+    """A stand-in 'market' made from the uploaded stocks: their average daily return, compounded.
+
+    Used only when no real index is available. It has no separate High/Low, so High = Low = Close
+    (SuperTrend then uses close-to-close moves only - an approximation).
+    """
+    if close is None or close.empty:
+        return None
+    rets = close.pct_change(fill_method=None).mean(axis=1, skipna=True).fillna(0.0)
+    level = 100.0 * (1.0 + rets).cumprod()
+    return pd.DataFrame({"Open": level, "High": level, "Low": level, "Close": level})
+
+
+def regime_status(signal: pd.Series | None, asof) -> dict:
+    """Today's market state from a build_signal() series.
+
+    Returns {known, healthy, since, days}: `since` = first day of the current streak.
+    """
+    if signal is None or len(signal) == 0:
+        return {"known": False, "healthy": True, "since": None, "days": 0}
+    s = signal.loc[: pd.Timestamp(asof)]
+    if s.empty:
+        return {"known": False, "healthy": True, "since": None, "days": 0}
+    now = bool(s.iloc[-1])
+    flips = s.ne(s.shift()).to_numpy()
+    start_pos = int(np.flatnonzero(flips)[-1])
+    return {"known": True, "healthy": now, "since": s.index[start_pos], "days": len(s) - start_pos}

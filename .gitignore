@@ -1,0 +1,8 @@
+__pycache__/
+my_formulas.json
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.DS_Store
+*.log

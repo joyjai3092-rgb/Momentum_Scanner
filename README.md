@@ -12,7 +12,9 @@ Rank NSE stocks by **momentum** (stocks that have been rising tend to keep risin
 | **Backtest** | Pick a start and end date + rules (number of stocks, exit rank, weekly/monthly, market filter). See growth, worst fall, trades, yearly/monthly returns. Includes 5 ready-made strategies and a "compare all formulas" table. |
 | **Learn Momentum** | Plain-English guide built from your project papers, the NSE method, the Sigma guides, plus outside sources. |
 
-19 ready-made formulas + a "type your own" box that understands Sigma-style text, e.g. `((70% * 6 Month Performance) + (30% * 1 Month Performance)) / 1 Month Volatility`.
+19 ready-made formulas + a "type your own" box that understands Sigma-style text, e.g. `((70% * 6 Month Performance) + (30% * 1 Month Performance)) / 1 Month Volatility`. Formulas you write can be **saved** and then appear in every dropdown (rules: [docs/FORMULA_RULES.md](docs/FORMULA_RULES.md)).
+
+The Screener also tells you **whether the market is healthy enough to buy** (regime filter) and, if you enter your holdings, gives a **monthly rebalance plan** (EXIT / TRIM / BUY / TOPUP / HOLD).
 Full formula list: [docs/FORMULAS.md](docs/FORMULAS.md). Things I had to assume: [docs/ASSUMPTIONS.md](docs/ASSUMPTIONS.md).
 
 ## Is it free?
@@ -60,7 +62,7 @@ The tests check the maths against independent hand calculations, the backtest ru
 ## Using the app
 
 1. **Your list:** an Excel (.xlsx) or CSV with a column called **Symbol** (e.g. `RELIANCE`). `Company Name` and `Industry` columns are optional. `sample_data/sample_universe.xlsx` shows the layout. You can upload a different index list each time (Nifty 500, Nifty500 Momentum 50, Nifty500 Multicap, ...).
-2. **Screener:** choose a formula → press *Run screener*.
+2. **Screener:** choose a formula → set the market check (Step 4) → optionally enter your holdings (Step 5) → press *Run screener*.
 3. **Backtest:** choose a ready-made strategy or set your own rules → pick dates → *Run backtest*.
 
 ## First run checklist (live data)
@@ -75,7 +77,8 @@ pages/                  Screener, Backtest, Learn Momentum
 momentum/               the maths (formulas.py = formula library + help text)
 tests/                  automatic checks
 sample_data/            example stock list
-docs/                   formula reference + assumptions
+my_formulas.json        created when you save your own formulas (keep a backup: use the download button)
+docs/                   formula reference, formula-writing rules, assumptions
 .github/workflows/      automatic tests on GitHub
 .devcontainer/          one-click Codespaces set-up
 ```

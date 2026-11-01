@@ -24,10 +24,14 @@ Where your documents were silent I had to choose. Nothing below is investment ad
 | EQUITY filter | Weak when this rebalance's realised loss (stocks being sold) is at least your limit as % of portfolio value; healthy again when a later rebalance realises a profit | Guide's wording is ambiguous. |
 | Half Portfolio | First weak day: every holding is cut by half, at most 50% stays invested; idle cash is re-invested (top-up) when the market is healthy again | Follows the guide's example. |
 | Presets 2-5 | Starting points built from the prompt's formula examples and the guide's advice on exit rank | Preset 1 is exactly the prompt's example. Not proven - backtest them. |
+| Screener regime banner | Same filters as the Backtest (default SuperTrend 1 2.5 weekly) on the chosen index, as of the ranking date | A trend signal, not a forecast. If the index download fails the app falls back to the average of your uploaded stocks (High = Low = Close, so SuperTrend is approximate). |
+| Rebalance advisor | Same rules as the Backtest: sell if rank > exit rank or no score; fill free slots with best-ranked unheld stocks; equal money per slot; Half = sell half once, then cap 50% invested; healthy again = top up | You tell the app if you already halved last time (it cannot know). Holdings outside your uploaded list cannot be ranked and show as EXIT / no score. Prices are last closes. |
+| Custom formula extras | `Skip`, `FIP` and `52 Week High` terms are app-only; weeks 1-4 and months 1-12 are allowed | Not in Sigma Scanner, so such formulas cannot be pasted there. |
 | Index codes | `^NSEI`, `^CRSLDX` (Yahoo) | Could not be tested live from the build environment. |
 
 ## Known limits
 - **Survivorship bias:** only stocks in today's list are tested.
 - **Free Yahoo data:** gaps, wrong adjustments and renamed symbols happen.
-- **Not built yet:** Slope formulas, weekly (1-4 week) formulas in the library (the custom box accepts them), taxes, liquidity limits.
+- **Not built yet:** Slope formulas, weekly (1-4 week) formulas in the ready-made library (the Custom box accepts them), taxes, liquidity limits.
+- **Saved formulas:** stored in `my_formulas.json` next to the app. On free web hosts (e.g. Streamlit Community Cloud) the file can vanish when the app restarts - use the *Download backup* button.
 - **Live download not tested here:** the build environment could not reach Yahoo Finance. Everything else was tested with made-up prices.

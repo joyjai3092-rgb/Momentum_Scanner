@@ -90,3 +90,37 @@ def test_backtest_blocks_short_date_range():
     at.run()
     assert any("3 months" in e.value for e in at.error)
     assert _button(at, "Run backtest").disabled
+
+
+def test_screener_shows_market_banner_and_advice(tmp_path):
+    at = _app("pages/1_Screener.py")
+    at.checkbox(key="use_sample").check().run()
+    _button(at, "Run screener").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    texts = [x.value for x in at.success] + [x.value for x in at.warning]
+    assert any("Market looks" in t for t in texts), texts
+
+
+def test_screener_rebalance_advice_for_typed_holdings():
+    at = _app("pages/1_Screener.py")
+    at.checkbox(key="use_sample").check().run()
+    at.session_state["scr_hold_tbl"] = pd.DataFrame({"Symbol": ["RELIANCE", "NOSUCH"], "Qty": [10, 5]})
+    at.run()
+    _button(at, "Run screener").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("Monthly rebalance advice" in s.value for s in at.subheader)
+
+
+def test_save_custom_formula_then_it_is_in_dropdown(tmp_path, monkeypatch):
+    from momentum import myformulas
+    monkeypatch.setattr(myformulas, "STORE_PATH", tmp_path / "f.json")
+    at = _app("pages/2_Backtest.py")
+    at.selectbox(key="bt_formula").select("CUSTOM").run()
+    at.text_input(key="bt_custom").set_value("6 Month Performance / 6 Month Volatility").run()
+    at.text_input(key="bt_save_name").set_value("Test mine").run()
+    _button(at, "Save this formula").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert any(o.startswith("U01 - Test mine") for o in at.selectbox(key="bt_formula").options)
+    assert at.selectbox(key="bt_formula").value.startswith("U01")
+    from momentum import formulas
+    formulas.register_user_formulas([])

@@ -7,12 +7,12 @@ import streamlit as st
 from momentum import formulas as fml
 from momentum import ui
 from momentum.backtest import BacktestConfig, run_backtest
-from momentum.config import MIN_BACKTEST_DAYS, WARMUP_CALENDAR_DAYS
+from momentum.config import INDEX_EXTRA_DAYS, MIN_BACKTEST_DAYS, WARMUP_CALENDAR_DAYS
 from momentum.data import DataError
 from momentum.indicators import Indicators
 from momentum.metrics import drawdown_series, monthly_returns, yearly_returns
 from momentum.presets import PRESETS
-from momentum.regime import build_signal
+from momentum.regime import INDEX_REGIMES, TIMEFRAMES, build_signal, default_timeframe
 
 st.set_page_config(page_title="Backtest - Momentum Scanner", page_icon="🧪", layout="wide")
 ui.sidebar()
@@ -29,7 +29,7 @@ today = pd.Timestamp.today().normalize()
 DEFAULTS = {
     "bt_preset": PRESET_NAMES[0], "bt_capital": 100000, "bt_n": 20, "bt_exit": 40, "bt_freq": "Monthly",
     "bt_mday": 15, "bt_wday": "Friday", "bt_alt": "Previous", "bt_exec": "Same-day close", "bt_cost": 0.2,
-    "bt_regime": "SUPERTREND", "bt_ema": 100, "bt_macd": MACD_CHOICES[0], "bt_st": "1 2.5",
+    "bt_regime": "SUPERTREND", "bt_ema": 100, "bt_macd": MACD_CHOICES[0], "bt_st_p": 1, "bt_st_m": 2.5,
     "bt_action": "Half Portfolio", "bt_sl": 10.0,
     "bt_start": (today - pd.DateOffset(years=3)).date(), "bt_end": today.date(), "bt_formula": "F11",
 }
@@ -51,7 +51,8 @@ def apply_preset():
     else:
         st.session_state["bt_wday"] = WEEKDAYS[p.rebalance_day]
     if p.regime == "SUPERTREND":
-        st.session_state["bt_st"] = " ".join(str(x) for x in p.regime_params)
+        st.session_state["bt_st_p"] = int(p.regime_params[0])
+        st.session_state["bt_st_m"] = float(p.regime_params[1])
 
 
 # ------------------------------------------------------------------ 1. universe
@@ -99,26 +100,48 @@ exe = q4.radio("Trade at", ["Same-day close", "Next-day close"], key="bt_exec", 
 # ------------------------------------------------------------------ 3. regime filter
 st.subheader("3. Market regime filter (protects against bear markets)")
 g1, g2, g3 = st.columns(3)
-regime = g1.selectbox("Filter", ["None", "EMA", "MACD", "SUPERTREND", "EQUITY"], key="bt_regime",
+regime = g1.selectbox("Filter", ["None", "EMA", "MACD", "SUPERTREND", "SIGMA SUPERTREND", "EQUITY"], key="bt_regime",
                       help="EMA / MACD / SUPERTREND watch a market index. EQUITY watches your own realised losses. See the Learn page.")
 params: tuple = ()
 sl = 10.0
 if regime == "EMA":
-    params = (g2.selectbox("EMA length (days)", EMA_CHOICES, key="bt_ema"),)
+    params = (int(g2.number_input("EMA length (candles)", min_value=2, max_value=400, step=1, key="bt_ema")),)
 elif regime == "MACD":
-    params = tuple(int(x) for x in g2.selectbox("MACD (fast slow signal, daily)", MACD_CHOICES, key="bt_macd").split())
+    params = tuple(int(x) for x in g2.selectbox("MACD (fast slow signal, candles)", MACD_CHOICES, key="bt_macd").split())
+    mc = g3.text_input("...or type your own MACD (fast slow signal)", key="bt_macd_own", placeholder="e.g. 12 26 9")
+    if mc.strip():
+        try:
+            mp = tuple(int(x) for x in mc.split())
+            assert len(mp) == 3 and all(x >= 1 for x in mp) and mp[0] < mp[1]
+            params = mp
+        except (ValueError, AssertionError):
+            g3.error("Type three whole numbers: fast slow signal, with fast smaller than slow.")
 elif regime == "SUPERTREND":
-    a, b = g2.selectbox("SuperTrend (period multiplier, weekly)", ST_CHOICES, key="bt_st").split()
+    a = g2.number_input("ATR period", min_value=1, max_value=100, step=1, key="bt_st_p")
+    b = g3.number_input("ATR multiplier", min_value=0.1, max_value=10.0, step=0.1, key="bt_st_m")
     params = (int(a), float(b))
+elif regime == "SIGMA SUPERTREND":
+    per = g2.number_input("ATR period", min_value=1, max_value=100, value=10, step=1, key="bt_sst_p")
+    mul = g2.number_input("ATR multiplier", min_value=0.1, max_value=10.0, value=3.0, step=0.1, key="bt_sst_m")
+    wil = g3.radio("ATR method", ["Standard (RMA)", "Simple average"], key="bt_sst_atr", horizontal=True,
+                   help="Standard = TradingView's atr(). Simple average = sma of true range.") == "Standard (RMA)"
+    params = (int(per), float(mul), wil)
 elif regime == "EQUITY":
     sl = g2.number_input("Realised loss limit (%)", min_value=0.5, max_value=50.0, step=0.5, key="bt_sl")
-if regime in ("EMA", "MACD", "SUPERTREND"):
-    action = g3.radio("When the market is weak", ["Half Portfolio", "Go Cash"], key="bt_action", horizontal=True)
+if regime in INDEX_REGIMES:
+    action = st.radio("When the market is weak", ["Half Portfolio", "Go Cash"], key="bt_action", horizontal=True)
 elif regime == "EQUITY":
     action = "Half Portfolio"
     g3.info("EQUITY filter allows only Half Portfolio (Sigma rule).")
 else:
     action = "Half Portfolio"
+if regime in INDEX_REGIMES:
+    timeframe = st.selectbox("Candle timeframe for the filter", TIMEFRAMES, index=TIMEFRAMES.index(default_timeframe(regime)),
+                         key=f"bt_tf_{regime}",
+                         help="The indicator is calculated on daily, weekly or monthly candles. EMA length / MACD / SuperTrend periods then count candles of that size "
+                              "(e.g. EMA 34 on Weekly = 34 weeks). A weekly or monthly signal is used only after that candle has closed.")
+else:
+    timeframe = ""
 index_ticker = ui.index_picker("bt")
 
 # ------------------------------------------------------------------ 4. dates
@@ -143,7 +166,8 @@ if go:
     try:
         with st.spinner("Downloading prices - this can take a few minutes for 500 stocks..."):
             close, failed = ui.cached_prices(tuple(universe["Ticker"]), fetch_start, fetch_end, demo)
-            index_ohlc = ui.cached_index(index_ticker, fetch_start, fetch_end, demo)
+            index_start = (pd.Timestamp(start) - pd.Timedelta(days=INDEX_EXTRA_DAYS)).strftime("%Y-%m-%d")
+            index_ohlc = ui.cached_index(index_ticker, index_start, fetch_end, demo)
     except DataError as exc:
         st.error(str(exc))
         st.stop()
@@ -155,10 +179,10 @@ if go:
         start=pd.Timestamp(start), end=pd.Timestamp(end), capital=float(capital), n_stocks=int(n_stocks),
         exit_rank=int(exit_rank), frequency=freq, rebalance_day=int(day), alt_day=alt, execution=exe,
         cost_pct=float(cost), regime=regime if index_ohlc is not None or regime == "EQUITY" else "None",
-        regime_params=params, regime_action=action, equity_sl_pct=float(sl),
+        regime_params=params, regime_timeframe=timeframe, regime_action=action, equity_sl_pct=float(sl),
     )
     ind = Indicators(close)
-    sig = build_signal(index_ohlc, regime, params) if (index_ohlc is not None and regime in ("EMA", "MACD", "SUPERTREND")) else None
+    sig = build_signal(index_ohlc, regime, params, timeframe or None) if (index_ohlc is not None and regime in INDEX_REGIMES) else None
     try:
         with st.spinner("Running the backtest..."):
             res = run_backtest(close, index_ohlc, cfg, fid, custom_text, ind=ind, regime_signal=sig)
@@ -270,6 +294,6 @@ if bt:
             "- Empty slots are filled with the best-ranked stocks not held; money is split equally; whole shares only; a stock too expensive for its slot is skipped.\n"
             "- **Half Portfolio**: the first time the filter turns weak every holding is cut by half and at most 50% of the portfolio stays invested; when the market turns healthy again idle cash is re-invested. **Go Cash**: sell everything and wait.\n"
             "- **Survivorship bias:** only the stocks in the list you uploaded *today* are tested. Stocks that were dropped, merged or delisted are missing, which makes results look better than reality.\n"
-            "- Regime-filter details (MACD below its signal line = weak, SuperTrend on weekly candles, EQUITY filter wording) are my reading of the Sigma guide - see the Learn page."
+            "- Regime-filter details (MACD below its signal line = weak, SuperTrend on weekly candles by default (Daily and Monthly selectable), EQUITY filter wording) are my reading of the Sigma guide - see the Learn page."
         )
     st.caption(ui.DISCLAIMER)

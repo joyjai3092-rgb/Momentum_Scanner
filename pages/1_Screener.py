@@ -7,11 +7,11 @@ import streamlit as st
 
 from momentum import formulas as fml
 from momentum import ui
-from momentum.config import WARMUP_CALENDAR_DAYS
+from momentum.config import INDEX_EXTRA_DAYS, WARMUP_CALENDAR_DAYS
 from momentum.data import DataError
 from momentum import advisor
 from momentum.indicators import Indicators
-from momentum.regime import build_signal, equal_weight_index, regime_status
+from momentum.regime import TIMEFRAMES, build_signal, default_timeframe, equal_weight_index, regime_status
 from momentum.scoring import make_scorer, rank_table, snapshot
 
 EMA_CHOICES = [34, 68, 100, 150, 200]
@@ -52,18 +52,37 @@ price_max = p2.number_input("Maximum price (Rs., 0 = no limit)", min_value=0.0, 
 # ------------------------------------------------------------------ step 4: market check
 st.subheader("Step 4 - Is the market healthy enough to buy? (regime filter)")
 g1, g2, g3 = st.columns(3)
-regime = g1.selectbox("Filter", ["SUPERTREND", "EMA", "MACD", "None"], key="scr_regime",
+regime = g1.selectbox("Filter", ["SUPERTREND", "SIGMA SUPERTREND", "EMA", "MACD", "None"], key="scr_regime",
                       help="Checks the market index with a simple trend rule. Default = the Sigma guide's example (SuperTrend 1 2.5 on weekly candles).")
 params: tuple = ()
 if regime == "SUPERTREND":
-    a, b = g2.selectbox("SuperTrend (period multiplier, weekly)", ST_CHOICES, index=2, key="scr_st").split()
+    a = g2.number_input("ATR period", min_value=1, max_value=100, value=1, step=1, key="scr_st_p")
+    b = g3.number_input("ATR multiplier", min_value=0.1, max_value=10.0, value=2.5, step=0.1, key="scr_st_m")
     params = (int(a), float(b))
+elif regime == "SIGMA SUPERTREND":
+    per = g2.number_input("ATR period", min_value=1, max_value=100, value=10, step=1, key="scr_sst_p")
+    mul = g2.number_input("ATR multiplier", min_value=0.1, max_value=10.0, value=3.0, step=0.1, key="scr_sst_m")
+    wil = st.radio("ATR method", ["Standard (RMA)", "Simple average"], key="scr_sst_atr", horizontal=True) == "Standard (RMA)"
+    params = (int(per), float(mul), wil)
 elif regime == "EMA":
-    params = (g2.selectbox("EMA length (days)", EMA_CHOICES, index=2, key="scr_ema"),)
+    params = (int(g2.number_input("EMA length (candles)", min_value=2, max_value=400, value=100, step=1, key="scr_ema")),)
 elif regime == "MACD":
-    params = tuple(int(x) for x in g2.selectbox("MACD (fast slow signal, daily)", MACD_CHOICES, key="scr_macd").split())
-action = g3.radio("If the market is weak", ["Half Portfolio", "Go Cash"], key="scr_action", horizontal=True,
+    params = tuple(int(x) for x in g2.selectbox("MACD (fast slow signal, candles)", MACD_CHOICES, key="scr_macd").split())
+    mc = g3.text_input("...or type your own MACD (fast slow signal)", key="scr_macd_own", placeholder="e.g. 12 26 9")
+    if mc.strip():
+        try:
+            mp = tuple(int(x) for x in mc.split())
+            assert len(mp) == 3 and all(x >= 1 for x in mp) and mp[0] < mp[1]
+            params = mp
+        except (ValueError, AssertionError):
+            g3.error("Type three whole numbers: fast slow signal, with fast smaller than slow.")
+action = st.radio("If the market is weak", ["Half Portfolio", "Go Cash"], key="scr_action", horizontal=True,
                   help="Half Portfolio: sell half of each holding and keep at most 50% invested. Go Cash: sell everything.")
+timeframe = None
+if regime != "None":
+    timeframe = st.selectbox("Candle timeframe for the filter", TIMEFRAMES, index=TIMEFRAMES.index(default_timeframe(regime)),
+                         key=f"scr_tf_{regime}",
+                         help="The indicator is calculated on daily, weekly or monthly candles. EMA length / MACD / SuperTrend periods then count candles of that size.")
 index_ticker = ui.index_picker("scr")
 use_avg = st.checkbox("Use the average of MY uploaded stocks as the 'market' instead of an index", key="scr_use_avg",
                       help="Fallback when the index download fails. Less reliable than a real index.")
@@ -168,16 +187,18 @@ if go:
     if regime != "None":
         ohlc, src = None, ""
         if not use_avg:
-            ohlc = ui.cached_index(index_ticker, start, end, bool(st.session_state.get("demo")))
+            idx_start = (asof_ts - pd.Timedelta(days=INDEX_EXTRA_DAYS)).strftime("%Y-%m-%d")
+            ohlc = ui.cached_index(index_ticker, idx_start, end, bool(st.session_state.get("demo")))
             src = f"index {index_ticker}"
         if ohlc is None or ohlc.empty:
             if not use_avg:
                 st.warning(f"No data for index '{index_ticker}' - using the average of your uploaded stocks as the 'market' instead.")
             ohlc, src = equal_weight_index(close), "the average of your uploaded stocks"
-        sig = build_signal(ohlc, regime, params) if ohlc is not None else None
+        sig = build_signal(ohlc, regime, params, timeframe) if ohlc is not None else None
         status = regime_status(sig, date)
-        rtxt = {"SUPERTREND": f"SuperTrend {params[0] if params else ''} {params[1] if params else ''} (weekly)",
-                "EMA": f"EMA {params[0] if params else ''}", "MACD": "MACD " + " ".join(map(str, params))}[regime]
+        rtxt = {"SUPERTREND": f"SuperTrend {params[0] if params else ''} {params[1] if params else ''}",
+                "SIGMA SUPERTREND": "Sigma SuperTrend " + " ".join(map(str, params[:2])),
+                "EMA": f"EMA {params[0] if params else ''}", "MACD": "MACD " + " ".join(map(str, params))}[regime] + f", {timeframe} candles"
         if not status["known"]:
             st.info("Not enough market history to judge the regime.")
         elif status["healthy"]:

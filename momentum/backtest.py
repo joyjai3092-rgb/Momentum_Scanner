@@ -24,7 +24,7 @@ import pandas as pd
 from .config import DEFAULT_COST_PCT
 from .indicators import Indicators
 from .metrics import compute_metrics, trade_stats
-from .regime import build_signal
+from .regime import INDEX_REGIMES, build_signal
 from .scoring import make_scorer
 
 
@@ -41,8 +41,9 @@ class BacktestConfig:
     alt_day: str = "Previous"             # holiday rule: "Previous" | "Next"
     execution: str = "Same-day close"     # "Same-day close" | "Next-day close"
     cost_pct: float = DEFAULT_COST_PCT    # per buy and per sell
-    regime: str = "None"                  # None | EMA | MACD | SUPERTREND | EQUITY
+    regime: str = "None"                  # None | EMA | MACD | SUPERTREND | SIGMA SUPERTREND | EQUITY
     regime_params: tuple = ()
+    regime_timeframe: str = ""            # "" = default for the filter; Daily | Weekly | Monthly
     regime_action: str = "Half Portfolio"  # "Half Portfolio" | "Go Cash"
     equity_sl_pct: float = 10.0           # only for EQUITY filter
 
@@ -132,11 +133,11 @@ def run_backtest(
     if len(days) < 20:
         raise ValueError("Not enough trading days between the start and end dates.")
 
-    if regime_signal is None and cfg.regime in ("EMA", "MACD", "SUPERTREND"):
+    if regime_signal is None and cfg.regime in INDEX_REGIMES:
         if index_ohlc is None or index_ohlc.empty:
             notes.append("Regime filter skipped: no index data was available.")
         else:
-            regime_signal = build_signal(index_ohlc, cfg.regime, cfg.regime_params)
+            regime_signal = build_signal(index_ohlc, cfg.regime, cfg.regime_params, cfg.regime_timeframe or None)
 
     reb = rebalance_dates(td, start, end, cfg.frequency, cfg.rebalance_day, cfg.alt_day)
     cost = cfg.cost_pct / 100.0
@@ -220,7 +221,7 @@ def run_backtest(
 
         # 2) market regime
         was_off = risk_off
-        if cfg.regime in ("EMA", "MACD", "SUPERTREND") and regime_signal is not None:
+        if cfg.regime in INDEX_REGIMES and regime_signal is not None:
             on = bool(regime_signal.asof(rdate)) if len(regime_signal) else True
             risk_off = not on
         elif cfg.regime == "EQUITY":

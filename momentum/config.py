@@ -31,3 +31,7 @@ WARMUP_CALENDAR_DAYS = 800
 
 # Sigma: start and end date should be at least 3 months apart.
 MIN_BACKTEST_DAYS = 90
+
+# Extra history for the market INDEX only (one small download): weekly / monthly indicators
+# (e.g. MACD 12 26 9 on monthly candles) need years of candles to warm up.
+INDEX_EXTRA_DAYS = 3000

@@ -143,3 +143,62 @@ def test_backup_import_skips_bad_and_duplicate(store):
     assert added == 1 and len(skipped) == 2 and {r["name"] for r in new} == {"Keep", "New"}
     with pytest.raises(myf.SaveError):
         myf.from_json("not json", base)
+
+
+# ---------------------------------------------------------------- Sigma SuperTrend (Pine port)
+def _ohlc(prices):
+    idx = pd.bdate_range("2023-01-02", periods=len(prices))
+    c = pd.Series(prices, index=idx, dtype=float)
+    return pd.DataFrame({"Open": c, "High": c * 1.005, "Low": c * 0.995, "Close": c})
+
+
+def test_sigma_supertrend_flips_down_on_crash_and_back_up():
+    up1 = np.linspace(100, 160, 80)
+    crash = np.linspace(160, 90, 40)
+    up2 = np.linspace(90, 200, 120)
+    sig = build_signal(_ohlc(np.r_[up1, crash, up2]), "SIGMA SUPERTREND", (10, 3.0, True, "Daily"))
+    assert sig.iloc[:80].all()                      # steady rise: healthy
+    assert not sig.iloc[110:120].any()              # deep into the fall: weak
+    assert sig.iloc[-1]                             # long recovery: healthy again
+
+
+def test_sigma_supertrend_methods_and_weekly_run():
+    px = np.r_[np.linspace(100, 150, 100), np.linspace(150, 100, 60), np.linspace(100, 170, 100)]
+    o = _ohlc(px)
+    a = build_signal(o, "SIGMA SUPERTREND", (10, 2.0, True, "Daily"))
+    b = build_signal(o, "SIGMA SUPERTREND", (10, 2.0, False, "Daily"))
+    w = build_signal(o, "SIGMA SUPERTREND", (10, 2.0, True, "Weekly"))
+    assert len(a) == len(b) == len(w) == len(o) and a.dtype == bool and w.dtype == bool
+    assert a.iloc[0] and a.iloc[:9].all()           # no ATR yet -> Pine default trend = up
+
+
+def test_sigma_supertrend_works_in_backtest():
+    close = trending_prices(n=420)
+    ohlc = equal_weight_index(close)
+    sig = build_signal(ohlc, "SIGMA SUPERTREND", (10, 3.0, True, "Daily"))
+    cfg = BacktestConfig(start=close.index[200], end=close.index[-1], capital=100000, n_stocks=3, exit_rank=5,
+                         regime="SIGMA SUPERTREND", regime_params=(10, 3.0, True, "Daily"))
+    res = run_backtest(close, ohlc, cfg, "F01", ind=Indicators(close), regime_signal=sig)
+    assert len(res.equity) > 50
+
+
+# ---------------------------------------------------------------- timeframes
+@pytest.mark.parametrize("kind,params", [("EMA", (10,)), ("MACD", (6, 12, 4)), ("SUPERTREND", (3, 2.0)), ("SIGMA SUPERTREND", (5, 2.0, True))])
+@pytest.mark.parametrize("tf", ["Daily", "Weekly", "Monthly"])
+def test_every_indicator_runs_on_every_timeframe(kind, params, tf):
+    px = np.r_[np.linspace(100, 160, 300), np.linspace(160, 90, 150), np.linspace(90, 200, 300)]
+    o = _ohlc(px)
+    sig = build_signal(o, kind, params, tf)
+    assert len(sig) == len(o) and sig.dtype == bool
+    assert sig.iloc[-1]                                    # ends in a long rise
+    assert not sig.iloc[330:440].all()                     # the fall is detected at some point
+
+
+def test_weekly_and_monthly_signal_never_peeks_ahead():
+    px = np.r_[np.linspace(100, 160, 200), np.linspace(160, 80, 120), np.linspace(80, 150, 200)]
+    o = _ohlc(px)
+    for tf, key in (("Weekly", lambda i: i.to_period("W-FRI")), ("Monthly", lambda i: i.to_period("M"))):
+        sig = build_signal(o, "EMA", (5,), tf)
+        per = pd.Series(key(o.index), index=o.index)
+        for _, days in o.groupby(per).groups.items():
+            assert sig.loc[days[:-1]].nunique() <= 1       # inside a candle the signal does not change before its last day

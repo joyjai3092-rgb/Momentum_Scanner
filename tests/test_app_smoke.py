@@ -124,3 +124,52 @@ def test_save_custom_formula_then_it_is_in_dropdown(tmp_path, monkeypatch):
     assert at.selectbox(key="bt_formula").value.startswith("U01")
     from momentum import formulas
     formulas.register_user_formulas([])
+
+
+def test_backtest_with_sigma_supertrend():
+    at = _app("pages/2_Backtest.py")
+    at.checkbox(key="use_sample").check().run()
+    at.selectbox(key="bt_regime").select("SIGMA SUPERTREND").run()
+    assert not at.exception, [e.value for e in at.exception]
+    at.session_state["bt_n"] = 10
+    at.session_state["bt_exit"] = 20
+    at.run()
+    _button(at, "Run backtest").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert not at.error, [e.value for e in at.error]
+    assert "CAGR (yearly growth)" in [m.label for m in at.metric]
+
+
+def test_screener_with_sigma_supertrend():
+    at = _app("pages/1_Screener.py")
+    at.checkbox(key="use_sample").check().run()
+    at.selectbox(key="scr_regime").select("SIGMA SUPERTREND").run()
+    _button(at, "Run screener").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("Sigma SuperTrend" in x.value for x in list(at.success) + list(at.warning))
+
+
+@pytest.mark.parametrize("tf", ["Daily", "Weekly", "Monthly"])
+def test_screener_supertrend_custom_atr_and_timeframe(tf):
+    at = _app("pages/1_Screener.py")
+    at.checkbox(key="use_sample").check().run()
+    at.number_input(key="scr_st_p").set_value(7).run()
+    at.number_input(key="scr_st_m").set_value(3.5).run()
+    at.selectbox(key="scr_tf_SUPERTREND").select(tf).run()
+    _button(at, "Run screener").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("Market looks" in x.value for x in list(at.success) + list(at.warning))
+
+
+@pytest.mark.parametrize("regime", ["EMA", "MACD", "SUPERTREND", "SIGMA SUPERTREND"])
+def test_backtest_each_regime_on_monthly_candles(regime):
+    at = _app("pages/2_Backtest.py")
+    at.checkbox(key="use_sample").check().run()
+    at.selectbox(key="bt_regime").select(regime).run()
+    at.selectbox(key=f"bt_tf_{regime}").select("Monthly").run()
+    at.session_state["bt_n"] = 10
+    at.session_state["bt_exit"] = 20
+    at.run()
+    _button(at, "Run backtest").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert not at.error, [e.value for e in at.error]

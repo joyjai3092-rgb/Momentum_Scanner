@@ -30,4 +30,11 @@ A formula is a list of **items** joined by `+ - * /` and brackets `( )`. Every s
 - `(12 Month Performance Skip 1 Month) / 12 Month Volatility`
 - `52 Week High * 6 Month Performance`
 
+**Filter rules (optional yes/no tests, separate from the score)**
+- A rule is `<formula> > <formula>` (also `>=`, `<`, `<=`). Either side may be a plain number or %. Join rules with `AND`, `;` or a new line. A stock must pass **all** rules.
+- Examples: `12 Month Performance > 0` (absolute momentum: still rising over a year), `3 Month Performance > -10%` (no recent slump), `52 Week High >= 0.8`.
+- A stock with a missing value **fails** the rule. Up to 10 rules.
+- Rules block **new buys**. Tick *Also sell a held stock that fails the rules* to make them force exits too.
+- *Buy only if in the top X%* is a separate limit on new buys, based on the rank.
+
 **Good practice:** test a new formula in the Backtest over more than one period before trusting it. Picking the formula with the best past result alone is "curve fitting".

@@ -23,6 +23,7 @@ Generated from `momentum/formulas.py`. Review each formula and tell me: keep / c
 | F17 | NSE Normalized Momentum Score | No (app only) | Index-methodology & research methods |
 | F18 | 52-Week-High Proximity | No (app only) | Index-methodology & research methods |
 | F19 | Quantitative Momentum (12-1 + Frog-in-the-Pan) | No (app only) | Index-methodology & research methods |
+| F20 | Percentile Composite (3/6/9/12M ranks, 25% each) | No (app only) | Index-methodology & research methods |
 
 ## F01 - 3-Month Return
 **In one line:** How much the price rose in the last 3 months.
@@ -566,6 +567,37 @@ _Educational tool - not investment advice._
 
 **Sources:**
 - Gray & Vogel, Quantitative Momentum: A Practitioner's Guide [project doc]
+
+_Educational tool - not investment advice._
+
+---
+
+## F20 - Percentile Composite (3/6/9/12M ranks, 25% each)
+**In one line:** Rank every stock on each of 4 returns, then average the four ranks.
+
+**How it works:** For each of the 3, 6, 9 and 12 month returns every stock gets a percentile (0 = worst in your list, 100 = best). The score is the plain average of the four percentiles. A stock needs all four returns to be scored.
+
+**Purpose:** Reward stocks that are strong on every horizon, and stop one huge return from dominating the score.
+
+**How to read it:** Score 0-100: 90 means the stock is typically in the top 10% across the four horizons.
+
+**Strengths:** Easy to explain; robust to extreme returns because only the order of stocks matters, not the size of returns.
+
+**Watch out for:** Percentiles depend on YOUR list: the same stock scores differently in a 30-stock list and a 500-stock list. It ignores volatility. The size of a return no longer matters (a 40% and a 400% gainer can get the same rank).
+
+**What the documents say:**
+- Not from the project documents: based on a screener script you shared. Averaging return ranks across horizons is a common practitioner approach; this app has not verified a published source.
+
+**Month length used:** Month = 21 trading days, year = 252 trading days (calendar-style, as in the papers / NSE document).
+
+**Sigma Scanner:** Not possible in Sigma Scanner (it cannot rank across stocks inside a formula).
+
+_Based on a script you shared - not a published formula. Use the Filters box for its 'recent weakness' and 'absolute momentum' rules._
+
+**Sources:**
+- A screener script shared by you in this project (not a published source)
+
+_Educational tool - not investment advice._
 
 _Educational tool - not investment advice._
 

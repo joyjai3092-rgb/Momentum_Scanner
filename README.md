@@ -12,7 +12,11 @@ Rank NSE stocks by **momentum** (stocks that have been rising tend to keep risin
 | **Backtest** | Pick a start and end date + rules (number of stocks, exit rank, weekly/monthly, market filter). See growth, worst fall, trades, yearly/monthly returns. Includes 5 ready-made strategies and a "compare all formulas" table. |
 | **Learn Momentum** | Plain-English guide built from your project papers, the NSE method, the Sigma guides, plus outside sources. |
 
-19 ready-made formulas + a "type your own" box that understands Sigma-style text, e.g. `((70% * 6 Month Performance) + (30% * 1 Month Performance)) / 1 Month Volatility`. Formulas you write can be **saved** and then appear in every dropdown (rules: [docs/FORMULA_RULES.md](docs/FORMULA_RULES.md)).
+20 ready-made formulas + a "type your own" box that understands Sigma-style text, e.g. `((70% * 6 Month Performance) + (30% * 1 Month Performance)) / 1 Month Volatility`. Formulas you write can be **saved** and then appear in every dropdown (rules: [docs/FORMULA_RULES.md](docs/FORMULA_RULES.md)).
+
+**Light and dark themes** (top-right menu > Settings), colour tags, a **Stock detail** tab (price chart, why it ranked) and a **PDC** (previous day close) column in the tables.
+
+Optional **filter rules** (e.g. `12 Month Performance > 0`) and a *buy only in the top X%* limit work in the Screener, the advisor and the Backtest.
 
 The Screener also tells you **whether the market is healthy enough to buy** (regime filter) and, if you enter your holdings, gives a **monthly rebalance plan** (EXIT / TRIM / BUY / TOPUP / HOLD).
 Full formula list: [docs/FORMULAS.md](docs/FORMULAS.md). Things I had to assume: [docs/ASSUMPTIONS.md](docs/ASSUMPTIONS.md).

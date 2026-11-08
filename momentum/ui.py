@@ -11,7 +11,7 @@ from . import myformulas as myf
 from .config import INDEX_CHOICES
 from .data import DataError, download_index, download_prices
 from .demo_data import make_demo_prices
-from .sigma_parser import FormulaError, describe, parse_formula
+from .sigma_parser import FormulaError, describe, parse_filters, parse_formula
 from .universe import UniverseError, read_universe
 
 SAMPLE_PATH = Path(__file__).resolve().parents[1] / "sample_data" / "sample_universe.xlsx"
@@ -23,6 +23,31 @@ DISCLAIMER = (
 
 
 # ------------------------------------------------------------------ sidebar
+CSS = """
+<style>
+.block-container {padding-top: 2.2rem; max-width: 1280px;}
+.hero {background: linear-gradient(120deg, #0b3d91 0%, #1f6feb 55%, #8250df 100%); color: #fff; padding: 1.6rem 1.8rem;
+       border-radius: 16px; margin-bottom: 1.2rem; box-shadow: 0 6px 18px rgba(31,111,235,.25);}
+.hero h1 {color: #fff; margin: 0 0 .3rem 0; font-size: 2rem; padding: 0;}
+.hero p {color: rgba(255,255,255,.92); margin: 0; font-size: 1.02rem;}
+.pill {display:inline-block; background: rgba(255,255,255,.18); border-radius: 999px; padding: .15rem .7rem; margin: .6rem .4rem 0 0; font-size: .82rem;}
+.card-title {font-weight: 700; font-size: 1.15rem; margin-bottom: .2rem;}
+.small-note {color: #6e7781; font-size: .85rem;}
+div[data-testid="stTabs"] button[role="tab"] {font-weight: 600;}
+h2, h3 {letter-spacing: -0.01em;}
+</style>
+"""
+
+
+def inject_css() -> None:
+    st.markdown(CSS, unsafe_allow_html=True)
+
+
+def hero(title: str, subtitle: str, pills: tuple = ()) -> None:
+    chips = "".join(f'<span class="pill">{p}</span>' for p in pills)
+    st.markdown(f'<div class="hero"><h1>{title}</h1><p>{subtitle}</p>{chips}</div>', unsafe_allow_html=True)
+
+
 def load_my_formulas() -> list:
     """Make the formulas the user saved available to every page (cheap: the list is tiny)."""
     if "my_records" not in st.session_state:
@@ -33,6 +58,7 @@ def load_my_formulas() -> list:
 
 def sidebar() -> None:
     load_my_formulas()
+    inject_css()
     with st.sidebar:
         st.markdown("### Momentum Scanner")
         st.toggle(
@@ -221,3 +247,89 @@ def index_picker(key: str) -> str:
     if label.startswith("Other"):
         return st.text_input("Yahoo Finance ticker", value="^NSEI", key=f"{key}_index_custom").strip()
     return INDEX_CHOICES[label]
+
+
+ABS_RULE = "12 Month Performance > 0"
+WEAK_RULE = "3 Month Performance > -10%"
+
+
+def filter_controls(key: str) -> dict:
+    """Optional yes/no rules + entry limit. Returns {text, ok, force_exit, entry_pct}."""
+    st.caption("Optional safety rules. A stock must pass **every** rule to be bought. They do not change the ranking.")
+    c1, c2 = st.columns(2)
+    abs_on = c1.checkbox(f"Absolute momentum: {ABS_RULE}", key=f"{key}_f_abs",
+                         help="Only buy a stock that is higher than it was 12 months ago (about 360 trading days). Avoids 'the best of a bad lot'.")
+    weak_on = c2.checkbox(f"Skip recent weakness: {WEAK_RULE}", key=f"{key}_f_weak",
+                          help="Skip a stock that fell more than 10% in the last 3 months. The 10% is the threshold from the script you shared - change it in the box below if you like.")
+    more = st.text_area("More rules (optional, one per line)", key=f"{key}_f_text", height=70,
+                        placeholder="e.g. 52 Week High >= 0.8",
+                        help="Open 'Formula rules' in the formula section for the full list of items.")
+    d1, d2 = st.columns(2)
+    force = d1.checkbox("Also sell a held stock that fails the rules", value=True, key=f"{key}_f_force",
+                        help="Ticked: a stock you hold that stops passing is sold. Unticked: rules only stop NEW buys.")
+    entry = d2.number_input("Buy a new stock only if it is in the top X% (0 = no limit)", min_value=0.0, max_value=99.0, step=5.0,
+                            value=0.0, key=f"{key}_entry_pct",
+                            help="Example: 20 = a new stock must rank in the top 20% of the stocks scored. Held stocks are judged by the exit rank instead.")
+    pen_on = st.checkbox("Also push weak stocks DOWN the ranking (score penalty)", key=f"{key}_pen_on",
+                         help="Instead of (or as well as) blocking a stock, lower its score. The score is first turned into a 0-100 percentile "
+                              "(100 = best in your list), then the points below are subtracted from every stock that fails the penalty rule, and the list is re-ranked.")
+    pen_rule, pen_points = "", 0.0
+    if pen_on:
+        p1, p2 = st.columns(2)
+        pen_rule = p1.text_input("Penalty applies when a stock FAILS this rule", value=WEAK_RULE, key=f"{key}_pen_rule")
+        pen_points = float(p2.number_input("Points to subtract (0-100)", min_value=1.0, max_value=100.0, value=25.0, step=5.0, key=f"{key}_pen_pts"))
+    rules = ([ABS_RULE] if abs_on else []) + ([WEAK_RULE] if weak_on else []) + [x.strip() for x in more.splitlines() if x.strip()]
+    text = " AND ".join(rules)
+    ok = True
+    if text:
+        try:
+            pf = parse_filters(text)
+            st.caption("Rules read as: " + " · ".join(f"`{c[0]}`" for c in pf.conds))
+        except FormulaError as exc:
+            st.error(str(exc))
+            ok = False
+    if pen_on:
+        try:
+            if not parse_filters(pen_rule).conds:
+                raise FormulaError("Type the rule that triggers the penalty.")
+        except FormulaError as exc:
+            st.error(str(exc))
+            ok = False
+    return {"text": text if ok else "", "ok": ok, "force_exit": bool(force), "entry_pct": float(entry),
+            "pen_rule": pen_rule if (ok and pen_on) else "", "pen_points": pen_points if (ok and pen_on) else 0.0}
+
+
+# ------------------------------------------------------------------ colour tags for tables (work in light and dark themes)
+_GREEN, _RED, _AMBER, _GREY = "rgba(46,160,67,0.28)", "rgba(248,81,73,0.28)", "rgba(210,153,34,0.30)", "rgba(139,148,158,0.20)"
+ACTION_TAGS = {"BUY": _GREEN, "TOPUP": _GREEN, "SELL": _RED, "EXIT": _RED, "TRIM": _AMBER, "HOLD": _GREY}
+
+
+def _tag_action(v):
+    parts = str(v).split() if isinstance(v, str) else []
+    key = parts[-1].upper() if parts else ""
+    return f"background-color: {ACTION_TAGS[key]}; font-weight: 600" if key in ACTION_TAGS else ""
+
+
+def _tag_signed(v):
+    if not isinstance(v, (int, float)) or pd.isna(v) or v == 0:
+        return ""
+    return "color: #2da44e" if v > 0 else "color: #f85149"
+
+
+def _tag_rules(v):
+    if isinstance(v, str) and v.startswith("❌"):
+        return "color: #f85149"
+    return "color: #2da44e" if isinstance(v, str) and v.startswith("✅") else ""
+
+
+def tag_table(df: pd.DataFrame):
+    """Return a Styler: green/red for BUY/SELL tags, up/down colours for % columns, red for failed rules."""
+    sty = df.style
+    for c in df.columns:
+        if c in ("Action", "Buy list"):
+            sty = sty.map(_tag_action, subset=[c])
+        elif c == "Rules":
+            sty = sty.map(_tag_rules, subset=[c])
+        elif c in ("Day %", "1M %", "3M %", "6M %", "9M %", "12M %", "P&L %", "Return %", "Realised P&L"):
+            sty = sty.map(_tag_signed, subset=[c])
+    return sty

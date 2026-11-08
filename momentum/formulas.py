@@ -19,6 +19,7 @@ SRC = {
     "SIGMA_SCORE": "Sigma Scanner - Stock Scoring Usage Guide [project doc]",
     "SIGMA_BT": "Sigma Scanner - Backtest User Guide [project doc]",
     "SIGMA_BTP": "Backtesting Prompt (formula examples) [project doc]",
+    "SHARED": "A screener script shared by you in this project (not a published source)",
     "GH2004": "George & Hwang (2004), The 52-Week High and Momentum Investing, Journal of Finance 59 (cited in JT2011 and Gray & Vogel)",
 }
 
@@ -344,6 +345,25 @@ LIBRARY: tuple = (
         sources=(SRC["GV"],), month_note=RESEARCH_MONTH_NOTE,
         sigma_text=None, sigma_note="Not possible in Sigma Scanner.",
     ),
+    _f(
+        id="F20", name="Percentile Composite (3/6/9/12M ranks, 25% each)", category="5. Index-methodology & research methods",
+        kind="native", expr=None, native_key="pct_composite",
+        one_liner="Rank every stock on each of 4 returns, then average the four ranks.",
+        explanation=(
+            "For each of the 3, 6, 9 and 12 month returns every stock gets a percentile (0 = worst in your list, 100 = best). "
+            "The score is the plain average of the four percentiles. A stock needs all four returns to be scored."
+        ),
+        purpose="Reward stocks that are strong on every horizon, and stop one huge return from dominating the score.",
+        how_to_read="Score 0-100: 90 means the stock is typically in the top 10% across the four horizons.",
+        strengths="Easy to explain; robust to extreme returns because only the order of stocks matters, not the size of returns.",
+        limits=("Percentiles depend on YOUR list: the same stock scores differently in a 30-stock list and a 500-stock list. "
+                "It ignores volatility. The size of a return no longer matters (a 40% and a 400% gainer can get the same rank)."),
+        evidence=("Not from the project documents: based on a screener script you shared. "
+                  "Averaging return ranks across horizons is a common practitioner approach; this app has not verified a published source.",),
+        sources=(SRC["SHARED"],), month_note=RESEARCH_MONTH_NOTE,
+        sigma_text=None, sigma_note="Not possible in Sigma Scanner (it cannot rank across stocks inside a formula).",
+        origin="shared",
+    ),
 )
 
 _BY_ID = {f.id: f for f in LIBRARY}
@@ -410,6 +430,8 @@ def help_markdown(f: Formula) -> str:
         lines += ["**Type this into Sigma Scanner:**", f"`{f.sigma_text}`"]
     else:
         lines += [f"**Sigma Scanner:** {f.sigma_note}"]
+    if f.origin == "shared":
+        lines += ["", "_Based on a script you shared - not a published formula. Use the Filters box for its 'recent weakness' and 'absolute momentum' rules._"]
     if f.origin == "combination":
         lines += ["", "_This combination is my own construction from documented parts - not a published formula._"]
     lines += ["", "**Sources:**"] + [f"- {s}" for s in f.sources]
@@ -447,6 +469,13 @@ A formula is a list of **items** joined by `+ - * /` and brackets `( )`. Every s
 - `((70% * 6 Month Performance) + (30% * 3 Month Performance)) / 1 Month Volatility`
 - `(12 Month Performance Skip 1 Month) / 12 Month Volatility`
 - `52 Week High * 6 Month Performance`
+
+**Filter rules (optional yes/no tests, separate from the score)**
+- A rule is `<formula> > <formula>` (also `>=`, `<`, `<=`). Either side may be a plain number or %. Join rules with `AND`, `;` or a new line. A stock must pass **all** rules.
+- Examples: `12 Month Performance > 0` (absolute momentum: still rising over a year), `3 Month Performance > -10%` (no recent slump), `52 Week High >= 0.8`.
+- A stock with a missing value **fails** the rule. Up to 10 rules.
+- Rules block **new buys**. Tick *Also sell a held stock that fails the rules* to make them force exits too.
+- *Buy only if in the top X%* is a separate limit on new buys, based on the rank.
 
 **Good practice:** test a new formula in the Backtest over more than one period before trusting it. Picking the formula with the best past result alone is "curve fitting".
 """

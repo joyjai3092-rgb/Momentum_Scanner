@@ -11,7 +11,7 @@ import math
 import numpy as np
 import pandas as pd
 
-COLUMNS = ["Action", "Symbol", "Name", "Rank", "Price", "Held qty", "Trade qty", "Trade value (Rs.)", "Why"]
+COLUMNS = ["Action", "Symbol", "Name", "Rank", "Price", "PDC", "Held qty", "Trade qty", "Trade value (Rs.)", "Why"]
 
 
 def read_holdings(df: pd.DataFrame) -> pd.DataFrame:
@@ -33,15 +33,24 @@ def read_holdings(df: pd.DataFrame) -> pd.DataFrame:
 
 def plan(ranked: pd.DataFrame, holdings: pd.DataFrame, n_stocks: int, exit_rank: int, healthy: bool,
          action: str = "Half Portfolio", already_halved: bool = False, extra_cash: float = 0.0,
-         cost_pct: float = 0.2) -> tuple:
+         cost_pct: float = 0.2, entry_max_rank: int | None = None, force_exit_on_fail: bool = True) -> tuple:
     """Build the to-do list.
 
-    ranked   : columns Symbol, Name, Rank, Price (every stock the screener could score, Rank 1 = best)
+    ranked   : columns Symbol, Name, Rank, Price (every stock the screener could score, Rank 1 = best);
+               optional Passes (True/False filter result) and FilterWhy (text of the rules failed)
+    entry_max_rank : a NEW stock is bought only if its rank is at most this (None = no limit)
+    force_exit_on_fail : a held stock that fails the filter rules is sold
     holdings : columns Symbol, Qty
     Returns (plan_table, summary_dict).
     """
     cost = cost_pct / 100.0
     r = ranked.drop_duplicates("Symbol").set_index("Symbol")
+    if "PDC" not in r.columns:
+        r["PDC"] = np.nan
+    if "Passes" not in r.columns:
+        r["Passes"] = True
+    if "FilterWhy" not in r.columns:
+        r["FilterWhy"] = ""
     rows = []
     cash = float(extra_cash)
     held_value = 0.0
@@ -57,11 +66,17 @@ def plan(ranked: pd.DataFrame, holdings: pd.DataFrame, n_stocks: int, exit_rank:
             px = np.nan
         rk = r.at[s, "Rank"] if s in r.index else np.nan
         name = r.at[s, "Name"] if s in r.index else ""
-        if pd.isna(rk) or rk > exit_rank:
-            why = "No score / no price data" if pd.isna(rk) else f"Rank {int(rk)} is worse than exit rank {exit_rank}"
+        fails = s in r.index and force_exit_on_fail and not bool(r.at[s, "Passes"])
+        if pd.isna(rk) or rk > exit_rank or fails:
+            if pd.isna(rk):
+                why = "No score / no price data"
+            elif rk > exit_rank:
+                why = f"Rank {int(rk)} is worse than exit rank {exit_rank}"
+            else:
+                why = f"Fails filter rule: {r.at[s, 'FilterWhy']}"
             if not np.isfinite(px):
                 unpriced.append(s)
-            rows.append(dict(Action="EXIT", Symbol=s, Name=name, Rank=rk, Price=px, **{"Held qty": q}, **{"Trade qty": q},
+            rows.append(dict(Action="EXIT", Symbol=s, Name=name, Rank=rk, Price=px, PDC=(r.at[s, "PDC"] if s in r.index else np.nan), **{"Held qty": q}, **{"Trade qty": q},
                              **{"Trade value (Rs.)": q * px if np.isfinite(px) else np.nan}, Why=why))
             if np.isfinite(px):
                 cash += q * px * (1 - cost)
@@ -74,7 +89,7 @@ def plan(ranked: pd.DataFrame, holdings: pd.DataFrame, n_stocks: int, exit_rank:
 
     if go_cash:
         for s, q, rk, name, px in kept:
-            rows.append(dict(Action="EXIT", Symbol=s, Name=name, Rank=rk, Price=px, **{"Held qty": q}, **{"Trade qty": q},
+            rows.append(dict(Action="EXIT", Symbol=s, Name=name, Rank=rk, Price=px, PDC=(r.at[s, "PDC"] if s in r.index else np.nan), **{"Held qty": q}, **{"Trade qty": q},
                              **{"Trade value (Rs.)": q * px if np.isfinite(px) else np.nan}, Why="Market is weak - Go Cash rule"))
             if np.isfinite(px):
                 cash += q * px * (1 - cost)
@@ -86,7 +101,7 @@ def plan(ranked: pd.DataFrame, holdings: pd.DataFrame, n_stocks: int, exit_rank:
     for s, q, rk, name, px in kept:
         if half and not already_halved and q // 2 > 0:
             t = q // 2
-            rows.append(dict(Action="TRIM", Symbol=s, Name=name, Rank=rk, Price=px, **{"Held qty": q}, **{"Trade qty": t},
+            rows.append(dict(Action="TRIM", Symbol=s, Name=name, Rank=rk, Price=px, PDC=(r.at[s, "PDC"] if s in r.index else np.nan), **{"Held qty": q}, **{"Trade qty": t},
                              **{"Trade value (Rs.)": t * px if np.isfinite(px) else np.nan},
                              Why="Market is weak - Half Portfolio rule: sell half"))
             if np.isfinite(px):
@@ -94,9 +109,10 @@ def plan(ranked: pd.DataFrame, holdings: pd.DataFrame, n_stocks: int, exit_rank:
             kept_after.append((s, q - t, rk, name, px))
         else:
             kept_after.append((s, q, rk, name, px))
-            rows.append(dict(Action="HOLD", Symbol=s, Name=name, Rank=rk, Price=px, **{"Held qty": q}, **{"Trade qty": 0},
+            rows.append(dict(Action="HOLD", Symbol=s, Name=name, Rank=rk, Price=px, PDC=(r.at[s, "PDC"] if s in r.index else np.nan), **{"Held qty": q}, **{"Trade qty": 0},
                              **{"Trade value (Rs.)": 0.0},
-                             Why=f"Rank {int(rk)} is inside exit rank {exit_rank}"))
+                             Why=f"Rank {int(rk)} is inside exit rank {exit_rank}" + (
+                                 "" if bool(r.at[s, "Passes"]) else f" (fails rule: {r.at[s, 'FilterWhy']} - kept, rules only block new buys)")))
 
     held_now = sum(q * px for _, q, _, _, px in kept_after if np.isfinite(px))
     total = held_now + cash
@@ -112,10 +128,12 @@ def plan(ranked: pd.DataFrame, holdings: pd.DataFrame, n_stocks: int, exit_rank:
                 break
             if s in held_syms or not np.isfinite(row["Price"]) or row["Price"] <= 0:
                 continue
+            if not bool(row["Passes"]) or (entry_max_rank is not None and row["Rank"] > entry_max_rank):
+                continue
             qty = int(math.floor(alloc / (row["Price"] * (1 + cost))))
             if qty < 1:
                 continue
-            rows.append(dict(Action="BUY", Symbol=s, Name=row["Name"], Rank=row["Rank"], Price=row["Price"], **{"Held qty": 0},
+            rows.append(dict(Action="BUY", Symbol=s, Name=row["Name"], Rank=row["Rank"], Price=row["Price"], PDC=row["PDC"], **{"Held qty": 0},
                              **{"Trade qty": qty}, **{"Trade value (Rs.)": qty * row["Price"]},
                              Why=f"Free slot - rank {int(row['Rank'])}"))
             n_buy += 1
@@ -131,7 +149,7 @@ def plan(ranked: pd.DataFrame, holdings: pd.DataFrame, n_stocks: int, exit_rank:
             if have < target:
                 qty = int(math.floor(min(target - have, cash) / (px * (1 + cost))))
                 if qty >= 1:
-                    rows.append(dict(Action="TOPUP", Symbol=s, Name=name, Rank=rk, Price=px, **{"Held qty": q},
+                    rows.append(dict(Action="TOPUP", Symbol=s, Name=name, Rank=rk, Price=px, PDC=(r.at[s, "PDC"] if s in r.index else np.nan), **{"Held qty": q},
                                      **{"Trade qty": qty}, **{"Trade value (Rs.)": qty * px},
                                      Why="Market healthy again - put idle cash back to work"))
                     cash -= qty * px * (1 + cost)

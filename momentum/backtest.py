@@ -25,7 +25,7 @@ from .config import DEFAULT_COST_PCT
 from .indicators import Indicators
 from .metrics import compute_metrics, trade_stats
 from .regime import INDEX_REGIMES, build_signal
-from .scoring import make_scorer
+from .scoring import entry_max_rank, make_filter, make_scorer
 
 
 # ---------------------------------------------------------------- settings
@@ -46,6 +46,11 @@ class BacktestConfig:
     regime_timeframe: str = ""            # "" = default for the filter; Daily | Weekly | Monthly
     regime_action: str = "Half Portfolio"  # "Half Portfolio" | "Go Cash"
     equity_sl_pct: float = 10.0           # only for EQUITY filter
+    filters: str = ""                     # yes/no stock rules, e.g. "12 Month Performance > 0 AND 3 Month Performance > -10%"
+    filters_force_exit: bool = True       # True: a held stock that fails the rules is sold; False: rules only block NEW buys
+    entry_pct: float = 0.0                # buy a NEW stock only if it ranks in the top X% of scored stocks (0 = off)
+    penalty_rule: str = ""                # stocks FAILING this rule lose `penalty_points` from their 0-100 percentile score
+    penalty_points: float = 0.0           # 0 = penalty off
 
     def validate(self) -> None:
         if self.n_stocks < 1:
@@ -124,7 +129,8 @@ def run_backtest(
     cfg.validate()
     close = close.sort_index()
     ind = ind or Indicators(close)
-    scorer = make_scorer(formula_id, custom_text)
+    scorer = make_scorer(formula_id, custom_text, (cfg.penalty_rule, cfg.penalty_points))
+    stock_filter = make_filter(cfg.filters)          # raises FormulaError for badly written rules
     valuation = close.ffill()
     td = close.index
     start, end = pd.Timestamp(cfg.start), pd.Timestamp(cfg.end)
@@ -154,6 +160,11 @@ def run_backtest(
         v = valuation.at[upto, sym] if sym in valuation.columns else np.nan
         return float(v) if pd.notna(v) else np.nan
 
+    def pdc(sym, date):
+        """Previous trading day's close (PDC) of a stock, as of `date`."""
+        pos = td.get_loc(date)
+        return last_price(sym, td[pos - 1]) if pos > 0 else np.nan
+
     def sell(sym, qty, px, date, action, reason):
         nonlocal cash
         qty = int(min(qty, shares.get(sym, 0)))
@@ -169,7 +180,7 @@ def run_backtest(
         if shares[sym] == 0:
             del shares[sym]
             avg_cost.pop(sym, None)
-        trades.append({"Date": date, "Symbol": sym, "Action": action, "Qty": qty, "Price": px,
+        trades.append({"Date": date, "Symbol": sym, "Action": action, "Qty": qty, "Price": px, "PDC": pdc(sym, date),
                        "Value": value, "Cost": fee, "Reason": reason, "Realised P&L": pnl,
                        "Return %": ret_pct})
         return pnl
@@ -184,7 +195,7 @@ def run_backtest(
         old = shares.get(sym, 0)
         avg_cost[sym] = (avg_cost.get(sym, 0.0) * old + px * (1 + cost) * qty) / (old + qty)
         shares[sym] = old + qty
-        trades.append({"Date": date, "Symbol": sym, "Action": action, "Qty": qty, "Price": px,
+        trades.append({"Date": date, "Symbol": sym, "Action": action, "Qty": qty, "Price": px, "PDC": pdc(sym, date),
                        "Value": value, "Cost": fee, "Reason": reason, "Realised P&L": np.nan,
                        "Return %": np.nan})
 
@@ -199,6 +210,12 @@ def run_backtest(
 
         scores = scorer(ind, rdate).dropna()
         ranks = scores.rank(ascending=False, method="first")
+        if stock_filter is not None:
+            passes, why_failed = stock_filter(ind, rdate)
+            passes = passes.reindex(close.columns, fill_value=False)
+        else:
+            passes, why_failed = None, None
+        max_entry_rank = entry_max_rank(len(scores), cfg.entry_pct)
         equity_before = cash + sum(q * (last_price(s, edate) if np.isfinite(last_price(s, edate)) else 0.0)
                                    for s, q in shares.items())
         n_exits = n_entries = 0
@@ -214,8 +231,14 @@ def run_backtest(
         # 1) exits by rank
         for sym in list(shares):
             r = ranks.get(sym, np.nan)
-            if pd.isna(r) or r > cfg.exit_rank:
-                why = "No score (no data)" if pd.isna(r) else f"Rank {int(r)} > exit rank {cfg.exit_rank}"
+            failed_rule = passes is not None and cfg.filters_force_exit and not bool(passes.get(sym, False))
+            if pd.isna(r) or r > cfg.exit_rank or failed_rule:
+                if pd.isna(r):
+                    why = "No score (no data)"
+                elif r > cfg.exit_rank:
+                    why = f"Rank {int(r)} > exit rank {cfg.exit_rank}"
+                else:
+                    why = f"Filter failed: {why_failed.get(sym, '')}"
                 realised += sell(sym, shares[sym], last_price(sym, edate), edate, "SELL", why)
                 n_exits += 1
 
@@ -262,6 +285,10 @@ def run_backtest(
                     break
                 if sym in shares:
                     continue
+                if passes is not None and not bool(passes.get(sym, False)):
+                    continue                                   # fails the filter rules
+                if max_entry_rank is not None and ranks[sym] > max_entry_rank:
+                    continue                                   # outside the entry limit (top X%)
                 px = last_price(sym, edate)
                 if not np.isfinite(px) or px <= 0:
                     continue
@@ -311,14 +338,15 @@ def run_backtest(
             benchmark = cfg.capital * ic / ic.iloc[0]
 
     trades_df = pd.DataFrame(trades, columns=[
-        "Date", "Symbol", "Action", "Qty", "Price", "Value", "Cost", "Reason", "Realised P&L", "Return %"])
+        "Date", "Symbol", "Action", "Qty", "Price", "PDC", "Value", "Cost", "Reason", "Realised P&L", "Return %"])
     last_day = days[-1]
     hold_rows = []
     for s, q in shares.items():
         px = last_price(s, last_day)
-        hold_rows.append({"Symbol": s, "Qty": q, "Avg cost": avg_cost[s], "Last price": px,
+        hold_rows.append({"Symbol": s, "Qty": q, "Avg cost": avg_cost[s], "Last price": px, "PDC": pdc(s, last_day),
+                          "Day %": (px / pdc(s, last_day) - 1) * 100,
                           "Value": q * px, "P&L %": (px / avg_cost[s] - 1) * 100})
-    holdings = pd.DataFrame(hold_rows, columns=["Symbol", "Qty", "Avg cost", "Last price", "Value", "P&L %"])
+    holdings = pd.DataFrame(hold_rows, columns=["Symbol", "Qty", "Avg cost", "Last price", "PDC", "Day %", "Value", "P&L %"])
 
     m = compute_metrics(equity, risk_free)
     m.update(trade_stats(trades_df))

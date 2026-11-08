@@ -9,7 +9,7 @@ import pandas as pd
 from .config import RESEARCH_DAYS_PER_MONTH, SIGMA_DAYS_PER_MONTH, TRADING_DAYS_PER_YEAR
 from .formulas import CUSTOM_ID, Formula, get_formula
 from .indicators import Indicators
-from .sigma_parser import ParsedFormula, evaluate, need_name, parse_formula
+from .sigma_parser import ParsedFormula, evaluate, evaluate_filter, need_name, parse_filters, parse_formula
 
 D12 = 12 * RESEARCH_DAYS_PER_MONTH   # 252
 D6 = 6 * RESEARCH_DAYS_PER_MONTH     # 126
@@ -96,6 +96,14 @@ def _score_native(key: str, ind: Indicators, date) -> pd.Series:
         both = pd.concat([mr12, mr6], axis=1).dropna()
         z = 0.5 * _zscore(both.iloc[:, 0]) + 0.5 * _zscore(both.iloc[:, 1])
         return _normalise_z(z).reindex(mr12.index)
+    if key == "pct_composite":
+        # average of each stock's percentile rank (0-100) on the 3, 6, 9 and 12 month returns, 25% each
+        cols = [_row(ind.perf(m * RESEARCH_DAYS_PER_MONTH), date) for m in (3, 6, 9, 12)]
+        tbl = pd.concat(cols, axis=1).dropna()
+        score = pd.Series(np.nan, index=cols[0].index)
+        if not tbl.empty:
+            score.loc[tbl.index] = tbl.rank(pct=True).mean(axis=1) * 100
+        return score
     if key == "quant_momentum":
         gen = _row(ind.skip_return(D12, D1), date)
         fip = _row(ind.fip(D12), date)
@@ -116,8 +124,33 @@ def _score_native(key: str, ind: Indicators, date) -> pd.Series:
     raise KeyError(f"Unknown native scorer: {key}")
 
 
-def make_scorer(formula_id: str, custom_text: str | None = None):
-    """Return fn(ind, date) -> Series of scores (NaN = cannot be scored)."""
+def with_penalty(base, rule_text: str, points: float):
+    """Wrap a scorer: convert its scores to percentiles (0-100, 100 = best in the list) and subtract `points`
+    from every stock that FAILS `rule_text` (e.g. '3 Month Performance > -10%'). Higher final score = better."""
+    check = make_filter(rule_text)
+    if check is None or not points:
+        return base
+
+    def penalised(ind: Indicators, date) -> pd.Series:
+        raw = base(ind, date)
+        pct = raw.rank(pct=True) * 100
+        passes, _ = check(ind, date)
+        return pct - np.where(passes.reindex(pct.index, fill_value=False), 0.0, float(points))
+
+    return penalised
+
+
+def make_scorer(formula_id: str, custom_text: str | None = None, penalty: tuple | None = None):
+    """Return fn(ind, date) -> Series of scores (NaN = cannot be scored).
+
+    penalty = (rule_text, points) optionally pushes stocks that fail the rule down the ranking."""
+    base = _make_base_scorer(formula_id, custom_text)
+    if penalty and penalty[0] and penalty[1]:
+        return with_penalty(base, penalty[0], penalty[1])
+    return base
+
+
+def _make_base_scorer(formula_id: str, custom_text: str | None = None):
     if formula_id == CUSTOM_ID:
         parsed: ParsedFormula = parse_formula(custom_text or "")
 
@@ -141,6 +174,26 @@ def make_scorer(formula_id: str, custom_text: str | None = None):
     return native
 
 
+def make_filter(text: str | None):
+    """Return fn(ind, date) -> (passes, why_failed) for yes/no rules, or None when there are no rules."""
+    pf = parse_filters(text or "")
+    if not pf.conds:
+        return None
+
+    def fn(ind: Indicators, date):
+        vars_ = _sigma_vars(ind, date, pf.needs)
+        return evaluate_filter(pf, vars_, ind.close.columns)
+
+    return fn
+
+
+def entry_max_rank(n_ranked: int, entry_pct: float) -> int | None:
+    """'Buy only if in the top X%': the worst rank allowed for a NEW entry (None = no limit)."""
+    if not entry_pct or entry_pct <= 0 or entry_pct >= 100 or n_ranked <= 0:
+        return None
+    return max(int(math.ceil(entry_pct / 100.0 * n_ranked)), 1)
+
+
 def _clean(score: pd.Series, ind: Indicators, date) -> pd.Series:
     """A stock with no price on the date cannot be scored."""
     has_price = ind.close.loc[date].notna()
@@ -156,15 +209,17 @@ def rank_table(ind: Indicators, date, scorer) -> pd.DataFrame:
 
 
 def snapshot(ind: Indicators, date) -> pd.DataFrame:
-    """Handy extra columns shown next to the score (all Sigma-month based)."""
-    cols = {
-        "Price": ind.close.loc[date],
-        "1M %": ind.perf(1 * SIGMA_DAYS_PER_MONTH).loc[date] * 100,
-        "3M %": ind.perf(3 * SIGMA_DAYS_PER_MONTH).loc[date] * 100,
-        "6M %": ind.perf(6 * SIGMA_DAYS_PER_MONTH).loc[date] * 100,
-        "12M %": ind.perf(12 * SIGMA_DAYS_PER_MONTH).loc[date] * 100,
-        "6M Vol %": ind.vol(6 * SIGMA_DAYS_PER_MONTH).loc[date] * 100,
-        "FIP": ind.fip(D12).loc[date],
-        "% of 52W high": ind.high_proximity(TRADING_DAYS_PER_YEAR).loc[date] * 100,
-    }
+    """Handy extra columns shown next to the score. Month = 21 trading days, year = 252 (as in the research papers)."""
+    m = RESEARCH_DAYS_PER_MONTH
+    pos = ind.close.index.get_loc(date)
+    pdc = ind.close.iloc[pos - 1] if pos > 0 else pd.Series(np.nan, index=ind.close.columns)
+    cols = {"Price": ind.close.loc[date], "PDC": pdc}
+    cols["Day %"] = (cols["Price"] / pdc - 1) * 100
+    for k in (1, 3, 6, 9, 12):
+        cols[f"{k}M %"] = ind.perf(k * m).loc[date] * 100
+    for k in (1, 3, 6, 9, 12):
+        cols[f"{k}M Vol %"] = ind.vol(k * m).loc[date] * 100
+    cols["FIP"] = ind.fip(D12).loc[date]
+    cols["Consistency"] = -ind.fip(D12).loc[date] * 100
+    cols["% of 52W high"] = ind.high_proximity(TRADING_DAYS_PER_YEAR).loc[date] * 100
     return pd.DataFrame(cols)

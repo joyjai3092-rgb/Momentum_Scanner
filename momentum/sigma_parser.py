@@ -114,7 +114,7 @@ def _need_from_name(name: str):
     return None
 
 
-def parse_formula(text: str) -> ParsedFormula:
+def parse_formula(text: str, allow_constant: bool = False) -> ParsedFormula:
     """Turn a Sigma-style formula string into a safe, evaluable tree."""
     if not text or not text.strip():
         raise FormulaError("The formula is empty.")
@@ -153,12 +153,12 @@ def parse_formula(text: str) -> ParsedFormula:
                     f"'{node.id}' is not a recognised item. Use e.g. '6 Month Performance'."
                 )
             needs.add(need)
-    if not needs:
+    if not needs and not allow_constant:
         raise FormulaError("The formula must use at least one item such as '6 Month Performance'.")
     return ParsedFormula(text=raw, tree=tree, needs=tuple(sorted(needs)))
 
 
-def evaluate(parsed: ParsedFormula, variables: dict) -> pd.Series:
+def evaluate(parsed: ParsedFormula, variables: dict, index=None) -> pd.Series:
     """Evaluate with variables like {"P6": Series, "V3": Series} (one value per stock)."""
 
     def ev(node):
@@ -186,7 +186,9 @@ def evaluate(parsed: ParsedFormula, variables: dict) -> pd.Series:
     with np.errstate(divide="ignore", invalid="ignore"):
         out = ev(parsed.tree)
     if not isinstance(out, pd.Series):
-        raise FormulaError("The formula must involve at least one stock measure.")
+        if index is None:
+            raise FormulaError("The formula must involve at least one stock measure.")
+        out = pd.Series(float(out), index=index)
     return out.replace([np.inf, -np.inf], np.nan)
 
 
@@ -233,3 +235,57 @@ def describe(parsed: ParsedFormula) -> list:
         elif k == "H52":
             lines.append("**52 Week High**: today's price divided by the highest close of the last 252 trading days (1.00 = at the high).")
     return lines
+
+
+# ---------------------------------------------------------------- filters (yes/no rules)
+_CMP_RE = re.compile(r"(>=|<=|>|<)")
+_COND_SPLIT_RE = re.compile(r"\n|;|\bAND\b", re.IGNORECASE)
+MAX_CONDITIONS = 10
+
+
+@dataclass(frozen=True)
+class ParsedFilter:
+    text: str
+    conds: tuple            # ((label, left ParsedFormula, op, right ParsedFormula), ...)
+    needs: tuple
+
+
+def parse_filters(text: str) -> ParsedFilter:
+    """Read yes/no rules such as '12 Month Performance > 0 AND 3 Month Performance > -10%'.
+
+    One rule = <formula> <  <=  >  >= > <formula>. Rules are separated by AND, ';' or a new line;
+    a stock must pass ALL of them. Either side may be a plain number.
+    """
+    parts = [p.strip() for p in _COND_SPLIT_RE.split(text or "") if p and p.strip()]
+    if not parts:
+        return ParsedFilter(text="", conds=(), needs=())
+    if len(parts) > MAX_CONDITIONS:
+        raise FormulaError(f"Use at most {MAX_CONDITIONS} filter rules.")
+    conds, needs = [], set()
+    for part in parts:
+        ops = _CMP_RE.findall(part)
+        if len(ops) != 1:
+            raise FormulaError(f"Filter rule '{part}' needs exactly one comparison sign (>, >=, < or <=).")
+        left_t, right_t = _CMP_RE.split(part)[0], _CMP_RE.split(part)[2]
+        try:
+            left, right = parse_formula(left_t, allow_constant=True), parse_formula(right_t, allow_constant=True)
+        except FormulaError as exc:
+            raise FormulaError(f"In filter rule '{part}': {exc}") from exc
+        if not left.needs and not right.needs:
+            raise FormulaError(f"Filter rule '{part}' compares two plain numbers - use at least one item such as '12 Month Performance'.")
+        conds.append((part, left, ops[0], right))
+        needs.update(left.needs)
+        needs.update(right.needs)
+    return ParsedFilter(text=text.strip(), conds=tuple(conds), needs=tuple(sorted(needs)))
+
+
+def evaluate_filter(parsed: ParsedFilter, variables: dict, index) -> tuple:
+    """Returns (passes: bool Series, why_failed: text Series). A stock with a missing value FAILS the rule."""
+    passes = pd.Series(True, index=index)
+    why = pd.Series("", index=index, dtype=object)
+    for label, left, op, right in parsed.conds:
+        a, b = evaluate(left, variables, index), evaluate(right, variables, index)
+        ok = {">": a > b, ">=": a >= b, "<": a < b, "<=": a <= b}[op].fillna(False) & a.notna() & b.notna()
+        passes &= ok
+        why = why.where(ok, why + np.where(why == "", "", "; ") + label)
+    return passes, why

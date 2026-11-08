@@ -5,7 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from momentum import formulas as fml
-from momentum import ui
+from momentum import charts, ui
 from momentum.backtest import BacktestConfig, run_backtest
 from momentum.config import INDEX_EXTRA_DAYS, MIN_BACKTEST_DAYS, WARMUP_CALENDAR_DAYS
 from momentum.data import DataError
@@ -16,8 +16,7 @@ from momentum.regime import INDEX_REGIMES, TIMEFRAMES, build_signal, default_tim
 
 st.set_page_config(page_title="Backtest - Momentum Scanner", page_icon="🧪", layout="wide")
 ui.sidebar()
-st.title("🧪 Momentum Backtest")
-st.caption("See how a rule-set would have performed on past prices between two dates.")
+ui.hero("🧪 Momentum Backtest", "See how a rule-set would have performed on past prices between two dates - with interactive charts.", pills=("Sigma-style rules", "5 ready-made strategies", "Compare all formulas"))
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 EMA_CHOICES = [34, 68, 100, 150, 200]
@@ -144,8 +143,12 @@ else:
     timeframe = ""
 index_ticker = ui.index_picker("bt")
 
-# ------------------------------------------------------------------ 4. dates
-st.subheader("4. Date range")
+# ------------------------------------------------------------------ 4. filter rules
+st.subheader("4. Filter rules (optional)")
+flt = ui.filter_controls("bt")
+
+# ------------------------------------------------------------------ 5. dates
+st.subheader("5. Date range")
 d1, d2 = st.columns(2)
 start = d1.date_input("Start date", key="bt_start", max_value=today.date())
 end = d2.date_input("End date", key="bt_end", max_value=today.date())
@@ -153,7 +156,7 @@ date_ok = (pd.Timestamp(end) - pd.Timestamp(start)).days >= MIN_BACKTEST_DAYS
 if not date_ok:
     st.error("Start and end date should be at least 3 months apart.")
 
-ready = universe is not None and exit_rank >= n_stocks and date_ok and not (fid == fml.CUSTOM_ID and custom_text is None)
+ready = universe is not None and flt["ok"] and exit_rank >= n_stocks and date_ok and not (fid == fml.CUSTOM_ID and custom_text is None)
 go = st.button("Run backtest", type="primary", disabled=not ready)
 if universe is None:
     st.info("Load a stock list in section 1 to enable the button.")
@@ -180,6 +183,8 @@ if go:
         exit_rank=int(exit_rank), frequency=freq, rebalance_day=int(day), alt_day=alt, execution=exe,
         cost_pct=float(cost), regime=regime if index_ohlc is not None or regime == "EQUITY" else "None",
         regime_params=params, regime_timeframe=timeframe, regime_action=action, equity_sl_pct=float(sl),
+        filters=flt["text"], filters_force_exit=flt["force_exit"], entry_pct=flt["entry_pct"],
+        penalty_rule=flt["pen_rule"], penalty_points=flt["pen_points"],
     )
     ind = Indicators(close)
     sig = build_signal(index_ohlc, regime, params, timeframe or None) if (index_ohlc is not None and regime in INDEX_REGIMES) else None
@@ -214,25 +219,28 @@ if bt:
             st.write(", ".join(bt["failed"]))
     lbl = bt["custom"] if res.formula_id == fml.CUSTOM_ID else fml.label(fml.get_formula(res.formula_id))
     st.caption(f"Formula: **{lbl}** · {cfg.n_stocks} stocks · exit rank {cfg.exit_rank} · {cfg.frequency} "
-               f"· regime: {cfg.regime if cfg.regime != 'None' else 'off'} · {cfg.start.date()} to {cfg.end.date()}")
+               f"· regime: {cfg.regime if cfg.regime != 'None' else 'off'} · {cfg.start.date()} to {cfg.end.date()}"
+               + (f" · rules: {cfg.filters}" if cfg.filters else "") + (f" · new buys only in top {cfg.entry_pct:g}%" if cfg.entry_pct else "")
+               + (f" · penalty {cfg.penalty_points:g} pts if fails {cfg.penalty_rule}" if cfg.penalty_points else ""))
 
     k = st.columns(5)
-    k[0].metric("End value (Rs.)", f"{m['End value']:,.0f}", f"{m['Total return %']:.1f}%")
-    k[1].metric("CAGR (yearly growth)", f"{m['CAGR %']:.1f}%", f"index {bm.get('CAGR %', float('nan')):.1f}%" if bm else None, delta_color="off")
-    k[2].metric("Worst fall (max drawdown)", f"{m['Max drawdown %']:.1f}%", f"index {bm.get('Max drawdown %', float('nan')):.1f}%" if bm else None, delta_color="off")
-    k[3].metric("Sharpe", f"{m['Sharpe (rf as set)']:.2f}", help="Return per unit of risk, with 0% risk-free rate.")
-    k[4].metric("Trades", f"{m.get('Trades (buys+sells)', 0)}", f"costs Rs. {m.get('Total costs paid', 0):,.0f}", delta_color="off")
+    k[0].metric("End value (Rs.)", f"{m['End value']:,.0f}", f"{m['Total return %']:.1f}%", border=True)
+    k[1].metric("CAGR (yearly growth)", f"{m['CAGR %']:.1f}%", f"index {bm.get('CAGR %', float('nan')):.1f}%" if bm else None, delta_color="off", border=True)
+    k[2].metric("Worst fall (max drawdown)", f"{m['Max drawdown %']:.1f}%", f"index {bm.get('Max drawdown %', float('nan')):.1f}%" if bm else None, delta_color="off", border=True)
+    k[3].metric("Sharpe", f"{m['Sharpe (rf as set)']:.2f}", help="Return per unit of risk, with 0% risk-free rate.", border=True)
+    k[4].metric("Trades", f"{m.get('Trades (buys+sells)', 0)}", f"costs Rs. {m.get('Total costs paid', 0):,.0f}", delta_color="off", border=True)
 
     chart = pd.DataFrame({"Strategy": res.equity})
     if res.benchmark is not None:
         chart["Index (buy & hold)"] = res.benchmark
-    st.markdown("**Portfolio value over time**")
-    st.line_chart(chart)
+    st.markdown("**Portfolio value over time**  \n<span style='color:#6e7781;font-size:0.85rem'>Hover for values · drag to pan · scroll to zoom · double-click to reset</span>", unsafe_allow_html=True)
+    st.altair_chart(charts.equity_chart(res.equity, res.benchmark), width="stretch")
     dd = pd.DataFrame({"Strategy": drawdown_series(res.equity) * 100})
     if res.benchmark is not None:
         dd["Index (buy & hold)"] = drawdown_series(res.benchmark) * 100
     st.markdown("**Drawdown % (fall from the previous peak)**")
-    st.area_chart(dd)
+    st.altair_chart(charts.drawdown_chart(dd), width="stretch")
+    ltp = bt["close"].ffill().loc[: pd.Timestamp(cfg.end)].iloc[-1]
 
     t1, t2, t3, t4, t5, t6 = st.tabs(["Summary table", "Yearly & monthly", "Trades", "Rebalances", "Holdings at end", "Compare all formulas"])
     with t1:
@@ -245,15 +253,27 @@ if bt:
         y = yearly_returns(res.equity).rename(columns={"Return %": "Strategy %"})
         if res.benchmark is not None:
             y["Index %"] = yearly_returns(res.benchmark)["Return %"]
-        st.dataframe(y.style.format("{:.1f}"))
-        st.markdown("Monthly returns of the strategy (%)")
-        st.dataframe(monthly_returns(res.equity).style.format("{:.1f}", na_rep="").background_gradient(cmap="RdYlGn", axis=None, vmin=-15, vmax=15))
+        st.markdown("**Calendar-year returns (%)**")
+        st.altair_chart(charts.yearly_bars(y["Strategy %"], y["Index %"].rename("Index") if "Index %" in y else None), width="stretch")
+        st.markdown("**Monthly returns of the strategy (%)**")
+        mt = monthly_returns(res.equity)
+        st.altair_chart(charts.monthly_heatmap(mt), width="stretch")
+        with st.expander("Show the numbers"):
+            st.dataframe(y.style.format("{:.1f}"))
+            st.dataframe(mt.style.format("{:.1f}", na_rep=""))
     with t3:
-        st.dataframe(res.trades, hide_index=True)
+        cb = charts.contributors_bar(res.trades)
+        if cb is not None:
+            st.markdown("**Biggest winners and losers (realised profit, Rs.)**")
+            st.altair_chart(cb, width="stretch")
+        trades_show = res.trades.assign(LTP=res.trades["Symbol"].map(ltp))
+        st.caption(f"LTP = last available price on {pd.Timestamp(cfg.end).date()} (the end date, or the last trading day before it). 'Price' is the price the trade was done at.")
+        st.dataframe(trades_show, hide_index=True)
     with t4:
         st.dataframe(res.rebalances, hide_index=True)
     with t5:
-        st.dataframe(res.holdings, hide_index=True)
+        st.dataframe(res.holdings.rename(columns={"Last price": "LTP"}), hide_index=True,
+                     column_config={"LTP": st.column_config.NumberColumn(format="%.2f", help="Last available price on the end date.")})
     with t6:
         st.write("Runs **every formula in the library and your saved formulas** with the same rules and dates, so you can review them side by side.")
         st.caption("Careful: picking the formula with the best PAST result is 'curve fitting' and often disappoints later. "
@@ -281,9 +301,9 @@ if bt:
     with pd.ExcelWriter(buf, engine="openpyxl") as xw:
         pd.DataFrame([m]).T.rename(columns={0: "Strategy"}).to_excel(xw, sheet_name="Summary")
         chart.to_excel(xw, sheet_name="Equity curve")
-        res.trades.to_excel(xw, sheet_name="Trades", index=False)
+        res.trades.assign(LTP=res.trades["Symbol"].map(ltp)).to_excel(xw, sheet_name="Trades", index=False)
         res.rebalances.to_excel(xw, sheet_name="Rebalances", index=False)
-        res.holdings.to_excel(xw, sheet_name="Holdings", index=False)
+        res.holdings.rename(columns={"Last price": "LTP"}).to_excel(xw, sheet_name="Holdings", index=False)
         yearly_returns(res.equity).to_excel(xw, sheet_name="Yearly")
     st.download_button("Download full results (Excel)", buf.getvalue(), file_name="momentum_backtest.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")

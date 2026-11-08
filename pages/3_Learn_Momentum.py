@@ -5,7 +5,7 @@ from momentum import ui
 
 st.set_page_config(page_title="Learn Momentum - Momentum Scanner", page_icon="📚", layout="wide")
 ui.sidebar()
-st.title("📚 Learn Momentum Investing")
+ui.hero("📚 Learn Momentum Investing", "Plain-English guide from the research papers, the NSE method and the Sigma guides.")
 st.caption("Plain-English guide. Facts marked [doc] come from the documents in your project; "
            "[external] means an outside source I looked up.")
 
@@ -131,7 +131,7 @@ with st.expander("8. What this app cannot do (honest limits)"):
         """
     )
 
-with st.expander("9. All 19 formulas at a glance"):
+with st.expander("9. All 20 formulas at a glance"):
     for cat in dict.fromkeys(f.category for f in fml.LIBRARY):
         st.markdown(f"**{cat}**")
         for f in [x for x in fml.LIBRARY if x.category == cat]:
@@ -144,6 +144,17 @@ with st.expander("10. Write and save your own formula"):
     st.markdown(fml.RULES_MARKDOWN)
     st.markdown("**Steps:** pick *Custom* in the dropdown, type the formula, check the plain-English reading under the box, "
                 "run it on the Backtest page, then press *Save this formula*. It then appears in every dropdown and in 'Compare all formulas'.")
+
+with st.expander("10b. Filter rules and the entry limit"):
+    st.markdown(
+        "- A **filter rule** is a yes/no test, e.g. `12 Month Performance > 0` (the stock is higher than a year ago - often called *absolute momentum*) "
+        "or `3 Month Performance > -10%` (no recent slump).\n"
+        "- The **formula** decides the order; the **rules** decide who is allowed in. All rules must pass.\n"
+        "- Rules block new buys. Tick *Also sell a held stock that fails the rules* to make them force exits too.\n"
+        "- *Buy only if in the top X%* limits new buys by rank. Holdings are still judged by the exit rank.\n"
+        "- **Score penalty (optional):** instead of blocking a weak stock, push it down. Its score becomes a 0-100 percentile and N points (default 25) are subtracted if it fails the penalty rule.\n"
+        "- More rules = fewer stocks = possibly fewer than your target number. Test in the Backtest before trusting a rule."
+    )
 
 with st.expander("11. What is FIP? (column in the Screener)"):
     st.markdown(

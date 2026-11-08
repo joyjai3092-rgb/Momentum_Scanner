@@ -41,7 +41,7 @@ def test_screener_every_formula_runs():
     at = _app("pages/1_Screener.py")
     at.checkbox(key="use_sample").check().run()
     ids = at.selectbox(key="scr_formula").options
-    assert len(ids) == 20                              # 19 formulas + custom
+    assert len(ids) == 21                              # 20 formulas + custom
     for fid in ids:
         if fid == "CUSTOM":
             continue
@@ -173,3 +173,81 @@ def test_backtest_each_regime_on_monthly_candles(regime):
     _button(at, "Run backtest").click().run()
     assert not at.exception, [e.value for e in at.exception]
     assert not at.error, [e.value for e in at.error]
+
+
+def test_screener_filters_and_new_columns():
+    at = _app("pages/1_Screener.py")
+    at.checkbox(key="use_sample").check().run()
+    at.checkbox(key="scr_f_abs").check().run()
+    at.checkbox(key="scr_f_weak").check().run()
+    at.number_input(key="scr_entry_pct").set_value(50.0).run()
+    _button(at, "Run screener").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert not at.error, [e.value for e in at.error]
+    cols = set().union(*(set(d.value.columns) for d in at.dataframe))
+    assert {"9M %", "12M Vol %", "Consistency", "Percentile", "Rules", "PDC", "Day %"} <= cols
+
+
+def test_screener_bad_rule_blocks_run():
+    at = _app("pages/1_Screener.py")
+    at.checkbox(key="use_sample").check().run()
+    at.text_area(key="scr_f_text").set_value("12 Month Performance").run()
+    assert at.error and _button(at, "Run screener").disabled
+
+
+def test_backtest_with_filters_runs():
+    at = _app("pages/2_Backtest.py")
+    at.checkbox(key="use_sample").check().run()
+    at.checkbox(key="bt_f_abs").check().run()
+    at.session_state["bt_n"] = 8
+    at.session_state["bt_exit"] = 16
+    at.run()
+    _button(at, "Run backtest").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert not at.error, [e.value for e in at.error]
+    assert at.session_state["bt"]["res"].config.filters == "12 Month Performance > 0"
+
+
+def test_screener_with_score_penalty():
+    at = _app("pages/1_Screener.py")
+    at.checkbox(key="use_sample").check().run()
+    at.checkbox(key="scr_pen_on").check().run()
+    assert at.text_input(key="scr_pen_rule").value == "3 Month Performance > -10%"
+    _button(at, "Run screener").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert not at.error, [e.value for e in at.error]
+
+
+def test_backtest_with_score_penalty():
+    at = _app("pages/2_Backtest.py")
+    at.checkbox(key="use_sample").check().run()
+    at.checkbox(key="bt_pen_on").check().run()
+    at.session_state["bt_n"] = 8
+    at.session_state["bt_exit"] = 16
+    at.run()
+    _button(at, "Run backtest").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert not at.error, [e.value for e in at.error]
+    assert at.session_state["bt"]["res"].config.penalty_points == 25.0
+
+
+def test_screener_results_stay_after_search_and_stock_detail_works():
+    at = _app("pages/1_Screener.py")
+    at.checkbox(key="use_sample").check().run()
+    _button(at, "Run screener").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    at.text_input(key="scr_search").set_value("bank").run()           # any later click used to wipe the results
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("Ranked" in x.value for x in at.success)
+    sym = at.selectbox(key="scr_detail").options[2]
+    at.selectbox(key="scr_detail").select(sym).run()
+    assert not at.exception, [e.value for e in at.exception]
+    labels = [m.label for m in at.metric]
+    assert "PDC (Rs.)" in labels and "LTP (Rs.)" in labels
+
+
+def test_tag_table_handles_empty_and_missing_values():
+    from momentum import ui
+    df = pd.DataFrame({"Action": ["🟢 BUY", "", "🔴 EXIT"], "Buy list": ["BUY", "", ""], "Day %": [1.2, None, -0.5], "Rules": ["✅ OK", "❌ x", ""]})
+    html = ui.tag_table(df).to_html()
+    assert "rgba(46,160,67" in html and "#f85149" in html

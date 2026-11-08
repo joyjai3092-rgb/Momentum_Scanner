@@ -11,7 +11,7 @@ from momentum.sigma_parser import parse_formula
 
 def test_library_integrity():
     ids = [f.id for f in formulas.LIBRARY]
-    assert len(ids) == len(set(ids)) == 19
+    assert len(ids) == len(set(ids)) == 20
     for f in formulas.LIBRARY:
         assert f.one_liner and f.explanation and f.purpose and f.how_to_read and f.evidence and f.sources
         md = formulas.help_markdown(f)
